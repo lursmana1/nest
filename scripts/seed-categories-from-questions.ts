@@ -4,11 +4,11 @@ import { Category } from '../src/categories/entities/category.entity';
 
 const CATEGORY_META: Record<number, { name: string; iconKey: string }> = {
   0: { name: 'AM', iconKey: 'am' },
-  1: { name: 'A', iconKey: 'a' },
-  2: { name: 'B', iconKey: 'b' },
+  1: { name: 'B', iconKey: 'b' },
+  2: { name: 'A', iconKey: 'a' },
   3: { name: 'C', iconKey: 'c' },
-  4: { name: 'C1', iconKey: 'c1' },
-  5: { name: 'D', iconKey: 'd' },
+  4: { name: 'D', iconKey: 'd' },
+  5: { name: 'C1', iconKey: 'c1' },
   6: { name: 'D1', iconKey: 'd1' },
   7: { name: 'Military', iconKey: 'military' },
   8: { name: 'Tram', iconKey: 'tram' },

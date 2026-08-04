@@ -4,6 +4,10 @@ import { Repository } from 'typeorm';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Category } from './entities/category.entity';
+import {
+  formatExamRuleResponse,
+  resolveGeorgianExamRule,
+} from '../common/utils/georgian-exam-rules.util.js';
 
 @Injectable()
 export class CategoriesService {
@@ -14,6 +18,14 @@ export class CategoriesService {
 
   create(createCategoryDto: CreateCategoryDto) {
     return 'This action adds a new category';
+  }
+
+  private withExamRules(category: Pick<Category, 'id' | 'name' | 'iconKey' | 'questionsCount' | 'subjectCount'>) {
+    const rule = resolveGeorgianExamRule({ categories: [category.id] });
+    return {
+      ...category,
+      ...formatExamRuleResponse(category.id, rule),
+    };
   }
 
   async findAll() {
@@ -27,7 +39,7 @@ export class CategoriesService {
         'subjectCount',
       ],
     });
-    return rows;
+    return rows.map((row) => this.withExamRules(row));
   }
 
   async findOne(id: number) {
@@ -36,11 +48,7 @@ export class CategoriesService {
 
     const subjects = [...(category.subjects ?? [])].sort((a, b) => a.id - b.id);
     return {
-      id: category.id,
-      name: category.name,
-      iconKey: category.iconKey,
-      questionsCount: category.questionsCount,
-      subjectCount: category.subjectCount,
+      ...this.withExamRules(category),
       subjects,
     };
   }

@@ -176,25 +176,72 @@ export class ExamAttemptsService {
     const pageSize = Math.min(Math.max(1, size), MAX_HISTORY_PAGE_SIZE);
     const pageNum = Math.max(1, page);
 
-    const qb = this.attemptRepo
+    const baseQb = this.attemptRepo
       .createQueryBuilder('e')
       .where('e.userId = :userId', { userId })
       .andWhere(
         'EXISTS (SELECT 1 FROM user_answers ua WHERE ua."attemptId" = e.id)',
-      )
-      .orderBy('e.createdAt', 'DESC')
-      .skip((pageNum - 1) * pageSize)
-      .take(pageSize)
-      .leftJoinAndSelect('e.answers', 'answers');
+      );
 
-    const [attempts, total] = await qb.getManyAndCount();
+    const [attempts, total] = await Promise.all([
+      baseQb
+        .clone()
+        .orderBy('e.createdAt', 'DESC')
+        .skip((pageNum - 1) * pageSize)
+        .take(pageSize)
+        .getMany(),
+      baseQb.clone().getCount(),
+    ]);
+
+    const answerStats = await this.loadAnswerStats(
+      attempts.map((a) => a.id),
+    );
+
+    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
 
     return {
-      data: attempts.map((a) => this.toAttemptSummary(a)),
+      data: attempts.map((a) =>
+        this.toAttemptSummary(a, answerStats.get(a.id)),
+      ),
       total,
       page: pageNum,
-      totalPages: Math.ceil(total / pageSize),
+      pageSize,
+      totalPages,
     };
+  }
+
+  private async loadAnswerStats(
+    attemptIds: number[],
+  ): Promise<Map<number, { answeredCount: number; correctCount: number }>> {
+    const map = new Map<number, { answeredCount: number; correctCount: number }>();
+    if (attemptIds.length === 0) {
+      return map;
+    }
+
+    const rows = await this.answerRepo
+      .createQueryBuilder('a')
+      .select('a.attemptId', 'attemptId')
+      .addSelect('COUNT(*)', 'answeredCount')
+      .addSelect(
+        'SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)',
+        'correctCount',
+      )
+      .where('a.attemptId IN (:...attemptIds)', { attemptIds })
+      .groupBy('a.attemptId')
+      .getRawMany<{
+        attemptId: string;
+        answeredCount: string;
+        correctCount: string;
+      }>();
+
+    for (const row of rows) {
+      map.set(Number(row.attemptId), {
+        answeredCount: Number(row.answeredCount),
+        correctCount: Number(row.correctCount),
+      });
+    }
+
+    return map;
   }
 
   async getAttempt(userId: number, attemptId: number) {
@@ -289,12 +336,15 @@ export class ExamAttemptsService {
     return isExamPassed(correctCount, fallback.minCorrectToPass);
   }
 
-  private toAttemptSummary(attempt: ExamAttempt): AttemptSummary {
+  private toAttemptSummary(
+    attempt: ExamAttempt,
+    stats?: { answeredCount: number; correctCount: number },
+  ): AttemptSummary {
     return {
       id: attempt.id,
       questionCount: attempt.questionIds.length,
-      answeredCount: attempt.answers.length,
-      correctCount: attempt.answers.filter((x) => x.correct).length,
+      answeredCount: stats?.answeredCount ?? 0,
+      correctCount: stats?.correctCount ?? 0,
       minCorrectToPass: attempt.minCorrectToPass,
       createdAt: attempt.createdAt,
       endDate: attempt.endDate,

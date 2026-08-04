@@ -23,6 +23,7 @@ export interface PaginatedAttempts {
   data: AttemptSummary[];
   total: number;
   page: number;
+  pageSize: number;
   totalPages: number;
 }
 

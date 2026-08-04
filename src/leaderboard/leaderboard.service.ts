@@ -53,7 +53,7 @@ export class LeaderboardService {
       .groupBy('u.id')
       .addGroupBy('u.name')
       .addGroupBy('u.surname')
-      .orderBy('score', 'DESC');
+      .orderBy('COUNT(*)', 'DESC');
 
     const allRows = await baseQb.getRawMany<{
       u_id: number;

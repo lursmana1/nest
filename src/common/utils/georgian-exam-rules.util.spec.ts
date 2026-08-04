@@ -15,17 +15,25 @@ describe('resolveGeorgianExamRule', () => {
     });
   });
 
-  it('returns B rules for category 2', () => {
-    expect(resolveGeorgianExamRule({ categories: [2] })).toEqual({
-      categoryId: 2,
+  it('returns B rules for category 1', () => {
+    expect(resolveGeorgianExamRule({ categories: [1] })).toEqual({
+      categoryId: 1,
       questionCount: 30,
       minCorrectToPass: 25,
     });
   });
 
-  it('returns C1 rules for category 4', () => {
-    expect(resolveGeorgianExamRule({ categories: [4] })).toEqual({
-      categoryId: 4,
+  it('returns A rules for category 2', () => {
+    expect(resolveGeorgianExamRule({ categories: [2] })).toEqual({
+      categoryId: 2,
+      questionCount: 30,
+      minCorrectToPass: 27,
+    });
+  });
+
+  it('returns C1 rules for category 5', () => {
+    expect(resolveGeorgianExamRule({ categories: [5] })).toEqual({
+      categoryId: 5,
       questionCount: 35,
       minCorrectToPass: 32,
     });

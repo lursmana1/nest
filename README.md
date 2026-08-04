@@ -111,7 +111,7 @@ Language: `?lang=ka|ru|en` or `Accept-Language` header.
 | `POST` | `/exam-attempts/start?categories=0&lang=ka` | Start exam (personalized selection) |
 | `POST` | `/exam-attempts/:id/answer` | Submit answer `{ questionId, chosenAnswer }` |
 | `POST` | `/exam-attempts/:id/finish` | Finish attempt early |
-| `GET` | `/exam-attempts` | Attempt history (`?page=1&size=10`) |
+| `GET` | `/exam-attempts` | Attempt history (`?page=1&size=10` or `?limit=10`) |
 | `GET` | `/exam-attempts/:id` | Attempt detail |
 | `GET` | `/exam-attempts/stats?limit=1000` | Raw answer log |
 
@@ -135,15 +135,15 @@ Rules follow [sa.gov.ge](https://sa.gov.ge/p/driver-license/theoretical-test). E
 | Category | ID | Questions | Min correct to pass |
 |----------|----|-----------|---------------------|
 | AM | 0 | 20 | 18 |
-| A (A1/A2) | 1 | 30 | 27 |
-| B (B1) | 2 | 30 | 25 |
+| B (B1) | 1 | 30 | 25 |
+| A (A1/A2) | 2 | 30 | 27 |
 | C | 3 | 40 | 36 |
-| C1 | 4 | 35 | 32 |
-| D | 5 | 40 | 36 |
+| D | 4 | 40 | 36 |
+| C1 | 5 | 35 | 32 |
 | D1 | 6 | 35 | 32 |
-| Military | 7 | 30 | 27 |
+| Military / T | 7 | 30 | 27 |
 | Tram | 8 | 30 | 27 |
-| T / S | 9 | 30 | 27 |
+| T / S | 9 | 35 | 32 |
 
 Implemented in `src/common/utils/georgian-exam-rules.util.ts`.
 

@@ -52,7 +52,7 @@ export class UserStatsService {
       .select('a.questionId', 'questionId')
       .addSelect('COUNT(*)', 'wrongCount')
       .groupBy('a.questionId')
-      .orderBy('wrongCount', 'DESC');
+      .orderBy('COUNT(*)', 'DESC');
 
     const [rows, countResult] = await Promise.all([
       baseQb
