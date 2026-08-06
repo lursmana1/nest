@@ -125,8 +125,11 @@ Returns `400 Insufficient questions` when the filtered pool is smaller than the 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/user-stats/weak-questions` | Top 10 most-wrong questions |
-| `GET` | `/user-stats/weak-subjects` | Weakest subjects by correctness rate |
+| `GET` | `/user-stats/overview?category=1` | Dashboard bundle: readiness + subjects + weak areas + pool exposure |
+| `GET` | `/user-stats/readiness?category=1` | Readiness score (მზაობის ქულა) for a license category |
+| `GET` | `/user-stats/subject-progress?category=1` | All topics with attempted/correct/covered flags |
+| `GET` | `/user-stats/weak-questions?category=1` | Top wrong questions (optional `category`) |
+| `GET` | `/user-stats/weak-subjects?category=1` | Weakest subjects (optional `category`, full answer history) |
 
 ## Exam rules (Georgia, 2026)
 
@@ -145,7 +148,21 @@ Rules follow [sa.gov.ge](https://sa.gov.ge/p/driver-license/theoretical-test). E
 | Tram | 8 | 30 | 27 |
 | T / S | 9 | 35 | 32 |
 
-Implemented in `src/common/utils/georgian-exam-rules.util.ts`.
+Category **names and exam rules** are defined in `src/common/constants/category.constants.ts` and `georgian-exam-rules.util.ts`. `GET /categories` returns both even if DB rows still say "Category 1".
+
+### Readiness score (მზაობის ქულა)
+
+`GET /user-stats/readiness?category=1` (auth required) returns 0–100 per category:
+
+1. **Core** = 65% recent exam accuracy (last 10, early fails discounted) + 35% answer accuracy
+2. **Coverage factor** = `0.25 + 0.75 × (coveredTopics / topicsTotal)`  
+   A topic is **covered** only after answering **≥70%** of its distinct questions.
+
+So 0 covered topics keeps at most **20%** of the core score (your ~18% core → ~**4%** final).
+
+`readyForExam: true` when score ≥ 70, last exam passed, and ≥70% of topics covered.
+
+Implemented in `src/user-stats/readiness.util.ts`.
 
 ## Personalized question selection
 

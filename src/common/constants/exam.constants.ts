@@ -31,6 +31,21 @@ export const MAX_STATS_LIMIT = 1000;
 /** Minimum per-subject attempts (correct + wrong) before weak-subject ranking is reliable. */
 export const MIN_SUBJECT_ATTEMPTS_FOR_STATS = 10;
 
+/**
+ * Share of a topic's question pool (distinct) required to count as covered.
+ * Example: topic with 40 questions → need ≥28 unique answered.
+ */
+export const SUBJECT_COVERAGE_RATIO = 0.7;
+
+/** Completed attempts used for readiness exam accuracy (most recent first). */
+export const READINESS_MAX_ATTEMPTS = 10;
+
+/** Readiness score >= this + last pass + topic coverage → readyForExam. */
+export const READINESS_READY_SCORE_THRESHOLD = 70;
+
+/** Minimum share of topics covered for readyForExam. */
+export const READINESS_READY_PRACTICE_THRESHOLD = 0.7;
+
 /** Max page size for history. */
 export const MAX_HISTORY_PAGE_SIZE = 50;
 

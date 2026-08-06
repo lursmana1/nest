@@ -127,8 +127,9 @@ export class ExamAttemptsService {
       ).length;
       const passed = this.evaluatePass(updatedAttempt, correctCount);
       const completedAt = new Date();
-      const durationSeconds = Math.round(
-        (completedAt.getTime() - updatedAttempt.createdAt.getTime()) / 1000,
+      const durationSeconds = this.computeAttemptDuration(
+        updatedAttempt,
+        completedAt,
       );
       await this.attemptRepo.update(attemptId, {
         completedAt,
@@ -149,16 +150,14 @@ export class ExamAttemptsService {
       return {
         completedAt: attempt.completedAt,
         passed: attempt.passed ?? false,
-        durationSeconds: attempt.durationSeconds ?? 0,
+        durationSeconds: this.resolveDisplayDuration(attempt) ?? 0,
       };
     }
 
     const correctCount = attempt.answers.filter((a) => a.correct).length;
     const passed = this.evaluatePass(attempt, correctCount);
     const completedAt = new Date();
-    const durationSeconds = Math.round(
-      (completedAt.getTime() - attempt.createdAt.getTime()) / 1000,
-    );
+    const durationSeconds = this.computeAttemptDuration(attempt, completedAt);
     await this.attemptRepo.update(attemptId, {
       completedAt,
       passed,
@@ -212,8 +211,24 @@ export class ExamAttemptsService {
 
   private async loadAnswerStats(
     attemptIds: number[],
-  ): Promise<Map<number, { answeredCount: number; correctCount: number }>> {
-    const map = new Map<number, { answeredCount: number; correctCount: number }>();
+  ): Promise<
+    Map<
+      number,
+      {
+        answeredCount: number;
+        correctCount: number;
+        lastAnswerAt: Date | null;
+      }
+    >
+  > {
+    const map = new Map<
+      number,
+      {
+        answeredCount: number;
+        correctCount: number;
+        lastAnswerAt: Date | null;
+      }
+    >();
     if (attemptIds.length === 0) {
       return map;
     }
@@ -226,18 +241,21 @@ export class ExamAttemptsService {
         'SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)',
         'correctCount',
       )
+      .addSelect('MAX(a.createdAt)', 'lastAnswerAt')
       .where('a.attemptId IN (:...attemptIds)', { attemptIds })
       .groupBy('a.attemptId')
       .getRawMany<{
         attemptId: string;
         answeredCount: string;
         correctCount: string;
+        lastAnswerAt: Date | string | null;
       }>();
 
     for (const row of rows) {
       map.set(Number(row.attemptId), {
         answeredCount: Number(row.answeredCount),
         correctCount: Number(row.correctCount),
+        lastAnswerAt: row.lastAnswerAt ? new Date(row.lastAnswerAt) : null,
       });
     }
 
@@ -261,7 +279,7 @@ export class ExamAttemptsService {
       endDate: attempt.endDate,
       completedAt: attempt.completedAt,
       passed: attempt.passed,
-      durationSeconds: attempt.durationSeconds,
+      durationSeconds: this.resolveDisplayDuration(attempt),
       minCorrectToPass: attempt.minCorrectToPass,
       categories: attempt.categories,
       subjects: attempt.subjects,
@@ -336,9 +354,71 @@ export class ExamAttemptsService {
     return isExamPassed(correctCount, fallback.minCorrectToPass);
   }
 
+  /**
+   * Actual time spent answering: last answer − start.
+   * Cap only as a safety max (official exam length), never return the full limit
+   * just because the attempt was finished late.
+   */
+  private computeAttemptDuration(
+    attempt: ExamAttempt,
+    completedAt: Date,
+    lastAnswerAt?: Date | number | null,
+  ): number {
+    const startedAt = attempt.createdAt.getTime();
+    const lastAnswerMs =
+      typeof lastAnswerAt === 'number'
+        ? lastAnswerAt
+        : lastAnswerAt instanceof Date
+          ? lastAnswerAt.getTime()
+          : this.latestAnswerTime(attempt.answers);
+
+    const endedAt = lastAnswerMs ?? completedAt.getTime();
+    const rawSeconds = Math.max(0, Math.round((endedAt - startedAt) / 1000));
+    return Math.min(rawSeconds, EXAM_DURATION_MINUTES * 60);
+  }
+
+  private latestAnswerTime(
+    answers: UserAnswer[] | undefined,
+  ): number | null {
+    if (!answers?.length) return null;
+    let latest = 0;
+    for (const answer of answers) {
+      const t = answer.createdAt?.getTime?.() ?? 0;
+      if (t > latest) latest = t;
+    }
+    return latest > 0 ? latest : null;
+  }
+
+  private resolveDisplayDuration(
+    attempt: ExamAttempt,
+    lastAnswerAt?: Date | null,
+  ): number | null {
+    if (!attempt.completedAt) {
+      return null;
+    }
+
+    if (lastAnswerAt || attempt.answers?.length) {
+      return this.computeAttemptDuration(
+        attempt,
+        attempt.completedAt,
+        lastAnswerAt,
+      );
+    }
+
+    if (attempt.durationSeconds != null) {
+      return Math.min(attempt.durationSeconds, EXAM_DURATION_MINUTES * 60);
+    }
+
+    return this.computeAttemptDuration(attempt, attempt.completedAt);
+  }
+
   private toAttemptSummary(
     attempt: ExamAttempt,
-    stats?: { answeredCount: number; correctCount: number },
+    stats?: {
+      answeredCount: number;
+      correctCount: number;
+      lastAnswerAt?: Date | null;
+    },
   ): AttemptSummary {
     return {
       id: attempt.id,
@@ -350,7 +430,10 @@ export class ExamAttemptsService {
       endDate: attempt.endDate,
       completedAt: attempt.completedAt,
       passed: attempt.passed,
-      durationSeconds: attempt.durationSeconds,
+      durationSeconds: this.resolveDisplayDuration(
+        attempt,
+        stats?.lastAnswerAt,
+      ),
     };
   }
 }
