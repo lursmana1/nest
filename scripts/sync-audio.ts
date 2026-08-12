@@ -42,6 +42,80 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetryableTtsError(err: unknown): boolean {
+  const code = (err as { code?: number | string })?.code;
+  const msg = ((err as Error)?.message ?? '').toLowerCase();
+  return (
+    code === 13 ||
+    code === 14 ||
+    code === 8 ||
+    code === 4 ||
+    msg.includes('internal') ||
+    msg.includes('unavailable') ||
+    msg.includes('deadline') ||
+    msg.includes('resource exhausted') ||
+    msg.includes('rate limit') ||
+    msg.includes('429')
+  );
+}
+
+async function synthesizeWithRetry(
+  tts: InstanceType<typeof textToSpeech.TextToSpeechClient>,
+  text: string,
+  lang: Lang,
+  maxAttempts = 5,
+): Promise<{ audioContent?: Uint8Array | string | null }> {
+  const voiceConfig = VOICE_MAPPING[lang];
+  const voiceAttempts =
+    lang === 'ka'
+      ? [...KA_VOICE_CANDIDATES, undefined]
+      : [voiceConfig.name, undefined];
+
+  let lastErr: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    for (const candidate of voiceAttempts) {
+      try {
+        if (attempt === 1) {
+          console.log(
+            `🎙️ Requesting: ${candidate || '(auto)'} for [${lang}]`,
+          );
+        } else {
+          console.log(
+            `🎙️ Retry ${attempt}/${maxAttempts}: ${candidate || '(auto)'} for [${lang}]`,
+          );
+        }
+        const [res] = await tts.synthesizeSpeech({
+          input: { text },
+          voice: {
+            ...(candidate ? { name: candidate } : {}),
+            languageCode: voiceConfig.langCode,
+          },
+          audioConfig: { audioEncoding: 'MP3' },
+        });
+        return res;
+      } catch (err) {
+        lastErr = err;
+        const msg = (err as Error)?.message?.toLowerCase() ?? '';
+        if (msg.includes('does not exist') || msg.includes('invalid_argument')) {
+          continue; // try next voice candidate
+        }
+        if (isRetryableTtsError(err) && attempt < maxAttempts) {
+          const backoff = Math.min(30_000, 2000 * 2 ** (attempt - 1));
+          console.warn(
+            `TTS transient error (attempt ${attempt}/${maxAttempts}) → sleep ${backoff / 1000}s`,
+          );
+          await sleep(backoff);
+          break; // next outer attempt
+        }
+        throw err;
+      }
+    }
+  }
+
+  throw lastErr;
+}
+
 function getPublicUrl(bucket: string, region: string, key: string): string {
   const base =
     process.env.AWS_PUBLIC_BASE_URL ||
@@ -149,38 +223,21 @@ async function main() {
       break;
     }
 
-    const voiceConfig = VOICE_MAPPING[doc.lang];
-    const voiceAttempts =
-      doc.lang === 'ka'
-        ? [...KA_VOICE_CANDIDATES, undefined]
-        : [voiceConfig.name, undefined];
-
     let res;
-    let lastErr: unknown = null;
-    for (const candidate of voiceAttempts) {
-      try {
-        console.log(
-          `🎙️ Requesting: ${candidate || '(auto)'} for [${doc.lang}]`,
-        );
-        [res] = await tts.synthesizeSpeech({
-          input: { text },
-          voice: {
-            ...(candidate ? { name: candidate } : {}),
-            languageCode: voiceConfig.langCode,
-          },
-          audioConfig: { audioEncoding: 'MP3' },
-        });
-        break;
-      } catch (err) {
-        lastErr = err;
-        const msg = (err as Error)?.message?.toLowerCase() ?? '';
-        if (msg.includes('does not exist') || msg.includes('invalid_argument')) {
-          continue;
-        }
-        throw err;
-      }
+    try {
+      res = await synthesizeWithRetry(tts, text, doc.lang);
+    } catch (err) {
+      console.error(
+        `[${doc.id}/${doc.lang}] TTS failed after retries — skip:`,
+        (err as Error)?.message ?? err,
+      );
+      await sleep(DELAY_MS);
+      continue;
     }
-    if (!res) throw lastErr;
+    if (!res) {
+      console.error(`[${doc.id}/${doc.lang}] empty TTS response — skip`);
+      continue;
+    }
 
     if (!res.audioContent) {
       throw new Error(`TTS returned empty audio for ID ${doc.id}/${doc.lang}`);

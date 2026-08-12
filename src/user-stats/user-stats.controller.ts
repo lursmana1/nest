@@ -18,16 +18,19 @@ import { isValidCategoryId } from '../common/constants/category.constants.js';
 export class UserStatsController {
   constructor(private readonly userStatsService: UserStatsService) {}
 
-  /** All dashboard stats for one license category in one call. */
-  @Get('overview')
-  getOverview(
+  /**
+   * First-paint stats for the profile grid.
+   * Prefer this over firing readiness + question-pool + weak-* together.
+   */
+  @Get('summary')
+  getSummary(
     @Req() req: { user: { userId: number } },
     @Query('category', ParseIntPipe) category: number,
     @Headers('accept-language') acceptLanguage?: string,
   ) {
     this.assertCategory(category);
     const lang = parseLang(undefined, acceptLanguage);
-    return this.userStatsService.getOverview(req.user.userId, category, lang);
+    return this.userStatsService.getSummary(req.user.userId, category, lang);
   }
 
   @Get('readiness')
@@ -61,6 +64,23 @@ export class UserStatsController {
     );
   }
 
+  /** Distinct questions answered vs category pool size. */
+  @Get('question-pool')
+  getQuestionPool(
+    @Req() req: { user: { userId: number } },
+    @Query('category', ParseIntPipe) category: number,
+    @Headers('accept-language') acceptLanguage?: string,
+  ) {
+    this.assertCategory(category);
+    const lang = parseLang(undefined, acceptLanguage);
+    return this.userStatsService.getQuestionPool(
+      req.user.userId,
+      category,
+      lang,
+    );
+  }
+
+  /** Top wrong questions — compact `preview` only (no answers/explanations). */
   @Get('weak-questions')
   getWeakQuestions(
     @Req() req: { user: { userId: number } },

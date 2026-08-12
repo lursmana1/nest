@@ -23,11 +23,11 @@ import {
   attemptCategoryMatchParams,
   attemptMatchesCategorySql,
   attemptMatchesCategoryWhere,
+  answerJoinedCategorySql,
   categoryFilterJson,
 } from '../common/utils/attempt-category-filter.util.js';
 import { computeReadiness, type ReadinessResult, EARLY_FAIL_WINDOW } from './readiness.util.js';
 import {
-  aggregateSubjectCounts,
   buildSubjectProgressRows,
   type SubjectProgressRow,
 } from './user-stats-query.util.js';
@@ -41,16 +41,64 @@ type CategoryProgress = {
   progressRows: SubjectProgressRow[];
 };
 
-export type ReadinessResponse = ReadinessResult &
-  ReturnType<typeof formatExamRuleResponse> & {
-    categoryName: string;
-  };
+export type ReadinessResponse = {
+  categoryId: number;
+  categoryName: string;
+  questionCount: number;
+  minCorrectToPass: number;
+  maxWrongAnswers: number;
+  durationMinutes: number;
+  readinessScore: number;
+  confidence: ReadinessResult['confidence'];
+  readyForExam: boolean;
+  label: string;
+  examAccuracy: number;
+  answerAccuracy: number;
+  practicePart: number;
+  coverageFactor: number;
+  earlyFailCount: number;
+  lastAttemptPassed: boolean | null;
+  completedAttemptsTotal: number;
+  completedAttemptsUsed: number;
+  subjectsCovered: number;
+  subjectsMastered: number;
+  subjectsTotal: number;
+  weakSubjectsCount: number;
+};
+
+/** Compact first-paint payload for the profile stats grid. */
+export interface UserStatsSummary {
+  categoryId: number;
+  categoryName: string;
+  readinessScore: number;
+  readyForExam: boolean;
+  confidence: ReadinessResult['confidence'];
+  label: string;
+  subjectsCovered: number;
+  subjectsMastered: number;
+  subjectsTotal: number;
+  weakSubjectsCount: number;
+  completedAttemptsTotal: number;
+  distinctQuestionsAnswered: number;
+  totalQuestionsInCategory: number;
+  exposureRate: number;
+  questionCount: number;
+  minCorrectToPass: number;
+}
+
+export interface WeakQuestionPreview {
+  question: string;
+  hasImg: number;
+  img: string | null;
+  subject: number | null;
+}
 
 export interface WeakQuestionItem {
   questionId: number;
   wrongCount: number;
   totalAttempts: number;
-  question: unknown;
+  /** List-row fields only — no answers / explanations (keeps JSON tiny). */
+  preview: WeakQuestionPreview | null;
 }
 
 export interface WeakSubjectItem {
@@ -88,19 +136,11 @@ export interface SubjectProgressResponse {
   data: SubjectProgressRow[];
 }
 
-export interface UserStatsOverview {
+export interface QuestionPoolResponse {
   categoryId: number;
-  categoryName: string;
-  examRules: ReturnType<typeof formatExamRuleResponse>;
-  readiness: ReadinessResult;
-  subjectProgress: SubjectProgressResponse;
-  weakSubjects: WeakSubjectsResponse;
-  weakQuestions: WeakQuestionsResponse;
-  questionPool: {
-    distinctQuestionsAnswered: number;
-    totalQuestionsInCategory: number;
-    exposureRate: number;
-  };
+  distinctQuestionsAnswered: number;
+  totalQuestionsInCategory: number;
+  exposureRate: number;
 }
 
 @Injectable()
@@ -116,39 +156,44 @@ export class UserStatsService {
     private readonly categoryRepo: Repository<Category>,
   ) {}
 
-  async getOverview(
+  async getSummary(
     userId: number,
     categoryId: number,
     lang: string = DEFAULT_LANG,
-  ): Promise<UserStatsOverview> {
+  ): Promise<UserStatsSummary> {
     const progress = await this.loadCategoryProgress(userId, categoryId, lang);
-    const [readiness, weakSubjects, weakQuestions, pool] = await Promise.all([
+    const [readiness, pool] = await Promise.all([
       this.buildReadiness(userId, categoryId, progress),
-      this.getWeakSubjects(userId, lang, categoryId),
-      this.getWeakQuestions(userId, lang, categoryId),
       this.loadQuestionPoolExposure(userId, categoryId, lang),
     ]);
 
-    const {
-      categoryName,
-      categoryId: _ruleCategoryId,
-      questionCount: _questionCount,
-      minCorrectToPass: _minCorrect,
-      maxWrongAnswers: _maxWrong,
-      durationMinutes: _duration,
-      ...readinessScore
-    } = readiness;
-
     return {
       categoryId,
-      categoryName,
-      examRules: formatExamRuleResponse(categoryId, progress.rule),
-      readiness: readinessScore,
-      subjectProgress: this.toSubjectProgressResponse(categoryId, progress),
-      weakSubjects,
-      weakQuestions,
-      questionPool: pool,
+      categoryName: readiness.categoryName,
+      readinessScore: readiness.readinessScore,
+      readyForExam: readiness.readyForExam,
+      confidence: readiness.confidence,
+      label: readiness.label,
+      subjectsCovered: readiness.subjectsCovered,
+      subjectsMastered: readiness.subjectsMastered,
+      subjectsTotal: readiness.subjectsTotal,
+      weakSubjectsCount: readiness.weakSubjectsCount,
+      completedAttemptsTotal: readiness.completedAttemptsTotal,
+      distinctQuestionsAnswered: pool.distinctQuestionsAnswered,
+      totalQuestionsInCategory: pool.totalQuestionsInCategory,
+      exposureRate: pool.exposureRate,
+      questionCount: readiness.questionCount,
+      minCorrectToPass: readiness.minCorrectToPass,
     };
+  }
+
+  async getQuestionPool(
+    userId: number,
+    categoryId: number,
+    lang: string = DEFAULT_LANG,
+  ): Promise<QuestionPoolResponse> {
+    const pool = await this.loadQuestionPoolExposure(userId, categoryId, lang);
+    return { categoryId, ...pool };
   }
 
   async getReadiness(
@@ -223,10 +268,30 @@ export class UserStatsService {
       readyPracticeThreshold: READINESS_READY_PRACTICE_THRESHOLD,
     });
 
+    const rules = formatExamRuleResponse(categoryId, rule);
     return {
       categoryName: display.name,
-      ...formatExamRuleResponse(categoryId, rule),
-      ...readiness,
+      categoryId: rules.categoryId,
+      questionCount: rules.questionCount,
+      minCorrectToPass: rules.minCorrectToPass,
+      maxWrongAnswers: rules.maxWrongAnswers,
+      durationMinutes: rules.durationMinutes,
+      readinessScore: readiness.readinessScore,
+      confidence: readiness.confidence,
+      readyForExam: readiness.readyForExam,
+      label: readiness.label,
+      examAccuracy: readiness.examAccuracy,
+      answerAccuracy: readiness.answerAccuracy,
+      practicePart: readiness.practicePart,
+      coverageFactor: readiness.coverageFactor,
+      earlyFailCount: readiness.earlyFailCount,
+      lastAttemptPassed: readiness.lastAttemptPassed,
+      completedAttemptsTotal: readiness.completedAttemptsTotal,
+      completedAttemptsUsed: readiness.completedAttemptsUsed,
+      subjectsCovered: readiness.subjectsCovered,
+      subjectsMastered: readiness.subjectsMastered,
+      subjectsTotal: readiness.subjectsTotal,
+      weakSubjectsCount: readiness.weakSubjectsCount,
     };
   }
 
@@ -235,40 +300,56 @@ export class UserStatsService {
     lang: string = DEFAULT_LANG,
     categoryId?: number,
   ): Promise<WeakQuestionsResponse> {
-    const baseQb = this.answerRepo
-      .createQueryBuilder('a')
-      .innerJoin('a.attempt', 't')
-      .where('t.userId = :userId', { userId })
-      .select('a.questionId', 'questionId')
-      .addSelect(
-        'SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)',
-        'wrongCount',
-      )
-      .addSelect('COUNT(*)', 'totalAttempts')
-      .groupBy('a.questionId')
-      .having('SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0')
-      .orderBy('SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)', 'DESC');
-
+    const params: unknown[] = [userId, TOP_COUNT];
+    let categoryClause = '';
     if (categoryId != null) {
-      baseQb.andWhere(
-        attemptMatchesCategoryWhere('t', categoryId),
-        attemptCategoryMatchParams(categoryId),
-      );
+      params.push(categoryFilterJson(categoryId), categoryId);
+      categoryClause = `AND ${answerJoinedCategorySql('t', 'a', `$${params.length - 1}`, `$${params.length}`)}`;
     }
 
-    const [rows, total] = await Promise.all([
-      baseQb.clone().limit(TOP_COUNT).getRawMany<{
+    const rows = await this.answerRepo.manager.query<
+      {
         questionId: string;
         wrongCount: string;
         totalAttempts: string;
-      }>(),
-      this.countWeakQuestions(userId, categoryId ?? null),
-    ]);
+        total: string;
+      }[]
+    >(
+      `
+      WITH agg AS (
+        SELECT
+          a."questionId" AS "questionId",
+          SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)::int AS "wrongCount",
+          COUNT(*)::int AS "totalAttempts"
+        FROM user_answers a
+        INNER JOIN exam_attempts t ON a."attemptId" = t.id
+        WHERE t."userId" = $1
+          ${categoryClause}
+        GROUP BY a."questionId"
+        HAVING SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0
+      ),
+      ranked AS (
+        SELECT
+          agg.*,
+          COUNT(*) OVER()::int AS total,
+          ROW_NUMBER() OVER (ORDER BY agg."wrongCount" DESC, agg."totalAttempts" DESC) AS rn
+        FROM agg
+      )
+      SELECT "questionId", "wrongCount", "totalAttempts", total
+      FROM ranked
+      WHERE rn <= $2
+      ORDER BY rn
+      `,
+      params,
+    );
+
+    const total = Number(rows[0]?.total ?? 0);
     const questionIds = rows.map((r) => Number(r.questionId));
     const questions =
       questionIds.length > 0
         ? await this.questionRepo
             .createQueryBuilder('q')
+            .select(['q.id', 'q.question', 'q.hasImg', 'q.img', 'q.subject'])
             .where('q.lang = :lang', { lang })
             .andWhere('q.id IN (:...questionIds)', { questionIds })
             .getMany()
@@ -277,12 +358,22 @@ export class UserStatsService {
 
     return {
       categoryId: categoryId ?? null,
-      data: rows.map((r) => ({
-        questionId: Number(r.questionId),
-        wrongCount: Number(r.wrongCount),
-        totalAttempts: Number(r.totalAttempts),
-        question: questionMap.get(Number(r.questionId)) ?? null,
-      })),
+      data: rows.map((r) => {
+        const q = questionMap.get(Number(r.questionId));
+        return {
+          questionId: Number(r.questionId),
+          wrongCount: Number(r.wrongCount),
+          totalAttempts: Number(r.totalAttempts),
+          preview: q
+            ? {
+                question: q.question,
+                hasImg: q.hasImg,
+                img: q.img ?? null,
+                subject: q.subject,
+              }
+            : null,
+        };
+      }),
       total,
     };
   }
@@ -292,18 +383,131 @@ export class UserStatsService {
     lang: string = DEFAULT_LANG,
     categoryId?: number,
   ): Promise<WeakSubjectsResponse> {
-    const [aggregatedRows, total, nameMap] = await Promise.all([
-      this.loadWeakSubjectAggregates(userId, categoryId ?? null),
-      this.countWeakSubjects(userId, categoryId ?? null),
-      this.loadSubjectNameMap(categoryId, lang),
+    const [top, catalog] = await Promise.all([
+      this.loadWeakSubjectTop(userId, categoryId ?? null),
+      categoryId != null
+        ? this.loadCategorySubjectCatalog(categoryId, lang)
+        : Promise.resolve([] as CategorySubjectRow[]),
     ]);
 
-    const topRows = aggregatedRows.slice(0, TOP_COUNT);
-    if (topRows.length === 0) {
-      return { categoryId: categoryId ?? null, data: [], total };
+    if (top.rows.length === 0) {
+      return { categoryId: categoryId ?? null, data: [], total: top.total };
     }
 
-    const subjectIds = topRows.map((x) => x.subjectId);
+    const nameMap = new Map(catalog.map((s) => [s.id, s.name]));
+    const totalMap = new Map(catalog.map((s) => [s.id, s.questionsCount]));
+
+    let fallbackTotals = new Map<number, number>();
+    if (catalog.length === 0) {
+      fallbackTotals = await this.loadQuestionTotalsBySubject(
+        top.rows.map((x) => x.subjectId),
+        lang,
+        categoryId,
+      );
+    }
+
+    return {
+      categoryId: categoryId ?? null,
+      data: top.rows.map((row) => ({
+        subjectId: row.subjectId,
+        name: nameMap.get(row.subjectId) ?? `Subject ${row.subjectId}`,
+        wrongCount: row.wrongCount,
+        correctCount: row.correctCount,
+        attempted: row.attempted,
+        correctnessRate: round3(row.correctnessRate),
+        totalQuestions:
+          totalMap.get(row.subjectId) ??
+          fallbackTotals.get(row.subjectId) ??
+          0,
+      })),
+      total: top.total,
+    };
+  }
+
+  /** Aggregate all answers by topic — not latest-per-question (that mirrors weak-questions). */
+  private async loadWeakSubjectTop(
+    userId: number,
+    categoryId: number | null,
+  ): Promise<{
+    rows: {
+      subjectId: number;
+      wrongCount: number;
+      correctCount: number;
+      attempted: number;
+      correctnessRate: number;
+    }[];
+    total: number;
+  }> {
+    const params: unknown[] = [userId, MIN_SUBJECT_ATTEMPTS_FOR_STATS, TOP_COUNT];
+    let categoryClause = '';
+    if (categoryId != null) {
+      params.push(categoryFilterJson(categoryId), categoryId);
+      categoryClause = `AND ${answerJoinedCategorySql('t', 'a', `$${params.length - 1}`, `$${params.length}`)}`;
+    }
+
+    const rows = await this.answerRepo.manager.query<
+      {
+        subjectId: string;
+        wrongCount: string;
+        correctCount: string;
+        attempted: string;
+        correctnessRate: string;
+        total: string;
+      }[]
+    >(
+      `
+      WITH agg AS (
+        SELECT
+          a.subject AS "subjectId",
+          SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)::int AS "wrongCount",
+          SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::int AS "correctCount",
+          COUNT(*)::int AS attempted,
+          (SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::float / COUNT(*)) AS "correctnessRate"
+        FROM user_answers a
+        INNER JOIN exam_attempts t ON a."attemptId" = t.id
+        WHERE t."userId" = $1
+          AND a.subject IS NOT NULL
+          ${categoryClause}
+        GROUP BY a.subject
+        HAVING COUNT(*) >= $2
+          AND SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0
+      ),
+      ranked AS (
+        SELECT
+          agg.*,
+          COUNT(*) OVER()::int AS total,
+          ROW_NUMBER() OVER (
+            ORDER BY agg."correctnessRate" ASC, agg.attempted DESC
+          ) AS rn
+        FROM agg
+      )
+      SELECT "subjectId", "wrongCount", "correctCount", attempted, "correctnessRate", total
+      FROM ranked
+      WHERE rn <= $3
+      ORDER BY rn
+      `,
+      params,
+    );
+
+    return {
+      total: Number(rows[0]?.total ?? 0),
+      rows: rows.map((row) => ({
+        subjectId: Number(row.subjectId),
+        wrongCount: Number(row.wrongCount),
+        correctCount: Number(row.correctCount),
+        attempted: Number(row.attempted),
+        correctnessRate: Number(row.correctnessRate),
+      })),
+    };
+  }
+
+  private async loadQuestionTotalsBySubject(
+    subjectIds: number[],
+    lang: string,
+    categoryId?: number,
+  ): Promise<Map<number, number>> {
+    if (subjectIds.length === 0) return new Map();
+
     const totalQb = this.questionRepo
       .createQueryBuilder('q')
       .select('q.subject', 'subject')
@@ -321,125 +525,9 @@ export class UserStatsService {
       count: string;
     }>();
 
-    const totalMap = new Map(
+    return new Map(
       totalBySubject.map((x) => [Number(x.subject), Number(x.count)]),
     );
-
-    return {
-      categoryId: categoryId ?? null,
-      data: topRows.map((row) => ({
-        subjectId: row.subjectId,
-        name: nameMap.get(row.subjectId) ?? `Subject ${row.subjectId}`,
-        wrongCount: row.wrongCount,
-        correctCount: row.correctCount,
-        attempted: row.attempted,
-        correctnessRate: round3(row.correctnessRate),
-        totalQuestions: totalMap.get(row.subjectId) ?? 0,
-      })),
-      total,
-    };
-  }
-
-  /** Aggregate all answers by topic — not latest-per-question (that mirrors weak-questions). */
-  private async loadWeakSubjectAggregates(
-    userId: number,
-    categoryId: number | null,
-  ): Promise<
-    {
-      subjectId: number;
-      wrongCount: number;
-      correctCount: number;
-      attempted: number;
-      correctnessRate: number;
-    }[]
-  > {
-    const params: unknown[] = [userId, MIN_SUBJECT_ATTEMPTS_FOR_STATS];
-    let categoryClause = '';
-    if (categoryId != null) {
-      params.push(categoryFilterJson(categoryId), categoryId);
-      categoryClause = `AND ${attemptMatchesCategorySql('t', `$${params.length - 1}`, `$${params.length}`)}`;
-    }
-
-    const rows = await this.answerRepo.manager.query<
-      {
-        subjectId: string;
-        wrongCount: string;
-        correctCount: string;
-        attempted: string;
-        correctnessRate: string;
-      }[]
-    >(
-      `
-      SELECT
-        a.subject AS "subjectId",
-        SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)::int AS "wrongCount",
-        SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::int AS "correctCount",
-        COUNT(*)::int AS attempted,
-        (SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::float / COUNT(*)) AS "correctnessRate"
-      FROM user_answers a
-      INNER JOIN exam_attempts t ON a."attemptId" = t.id
-      WHERE t."userId" = $1
-        AND a.subject IS NOT NULL
-        ${categoryClause}
-      GROUP BY a.subject
-      HAVING COUNT(*) >= $2
-        AND SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0
-      ORDER BY "correctnessRate" ASC, attempted DESC
-      `,
-      params,
-    );
-
-    return rows.map((row) => ({
-      subjectId: Number(row.subjectId),
-      wrongCount: Number(row.wrongCount),
-      correctCount: Number(row.correctCount),
-      attempted: Number(row.attempted),
-      correctnessRate: Number(row.correctnessRate),
-    }));
-  }
-
-  private async countWeakSubjects(
-    userId: number,
-    categoryId: number | null,
-  ): Promise<number> {
-    const params: unknown[] = [userId, MIN_SUBJECT_ATTEMPTS_FOR_STATS];
-    let categoryClause = '';
-    if (categoryId != null) {
-      params.push(categoryFilterJson(categoryId), categoryId);
-      categoryClause = `AND ${attemptMatchesCategorySql('t', `$${params.length - 1}`, `$${params.length}`)}`;
-    }
-
-    const row = await this.answerRepo.manager.query<{ count: string }[]>(
-      `
-      SELECT COUNT(*)::int AS count
-      FROM (
-        SELECT a.subject
-        FROM user_answers a
-        INNER JOIN exam_attempts t ON a."attemptId" = t.id
-        WHERE t."userId" = $1
-          AND a.subject IS NOT NULL
-          ${categoryClause}
-        GROUP BY a.subject
-        HAVING COUNT(*) >= $2
-          AND SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0
-      ) weak_subjects
-      `,
-      params,
-    );
-
-    return Number(row[0]?.count ?? 0);
-  }
-
-  private async loadSubjectNameMap(
-    categoryId: number | undefined,
-    lang: string,
-  ): Promise<Map<number, string>> {
-    if (categoryId == null) {
-      return new Map();
-    }
-
-    const catalog = await this.loadCategorySubjectCatalog(categoryId, lang);
-    return new Map(catalog.map((subject) => [subject.id, subject.name]));
   }
 
   private async loadCategoryProgress(
@@ -455,45 +543,34 @@ export class UserStatsService {
     const rule = resolveGeorgianExamRule({ categories: [categoryId] });
     const passRate = rule.minCorrectToPass / rule.questionCount;
 
-    const [catalog, answerRows, distinctRows] = await Promise.all([
+    const [catalog, subjectStats] = await Promise.all([
       this.loadCategorySubjectCatalog(categoryId, lang),
-      this.loadAnswerRowsForCategory(userId, categoryId),
-      this.loadDistinctQuestionsBySubject(userId, categoryId),
+      this.loadSubjectAggregatesForCategory(userId, categoryId),
     ]);
+
+    const countsBySubject = new Map<
+      number,
+      { correctCount: number; wrongCount: number }
+    >();
+    const distinctBySubject = new Map<number, number>();
+    for (const row of subjectStats) {
+      countsBySubject.set(row.subjectId, {
+        correctCount: row.correctCount,
+        wrongCount: row.wrongCount,
+      });
+      distinctBySubject.set(row.subjectId, row.distinctQuestions);
+    }
 
     const progressRows = buildSubjectProgressRows(
       catalog,
-      aggregateSubjectCounts(answerRows),
-      distinctRows,
+      countsBySubject,
+      distinctBySubject,
       passRate,
       MIN_SUBJECT_ATTEMPTS_FOR_STATS,
       SUBJECT_COVERAGE_RATIO,
     );
 
     return { display, rule, passRate, progressRows };
-  }
-
-  private async countWeakQuestions(
-    userId: number,
-    categoryId: number | null,
-  ): Promise<number> {
-    const qb = this.answerRepo
-      .createQueryBuilder('a')
-      .innerJoin('a.attempt', 't')
-      .where('t.userId = :userId', { userId })
-      .select('a.questionId', 'questionId')
-      .groupBy('a.questionId')
-      .having('SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END) > 0');
-
-    if (categoryId != null) {
-      qb.andWhere(
-        attemptMatchesCategoryWhere('t', categoryId),
-        attemptCategoryMatchParams(categoryId),
-      );
-    }
-
-    const rows = await qb.getRawMany();
-    return rows.length;
   }
 
   private async countCompletedAttemptsForCategory(
@@ -526,177 +603,168 @@ export class UserStatsService {
       earlyWrongCount: number;
     }[]
   > {
-    const rows = await this.attemptRepo
-      .createQueryBuilder('t')
-      .leftJoin('t.answers', 'a')
-      .select('t.id', 'id')
-      .addSelect('t.minCorrectToPass', 'minCorrectToPass')
-      .addSelect('t.passed', 'passed')
-      .addSelect(
-        'SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)',
-        'correctCount',
-      )
-      .addSelect('COUNT(a.id)', 'answeredCount')
-      .where('t.userId = :userId', { userId })
-      .andWhere('t.completedAt IS NOT NULL')
-      .andWhere(
-        attemptMatchesCategoryWhere('t', categoryId),
-        attemptCategoryMatchParams(categoryId),
-      )
-      .groupBy('t.id')
-      .addGroupBy('t.minCorrectToPass')
-      .addGroupBy('t.passed')
-      .addGroupBy('t.completedAt')
-      .orderBy('t.completedAt', 'DESC')
-      .limit(READINESS_MAX_ATTEMPTS)
-      .getRawMany<{
+    const categoryFilter = categoryFilterJson(categoryId);
+    const fallbackThreshold = resolveGeorgianExamRule({
+      categories: [categoryId],
+    }).minCorrectToPass;
+
+    const rows = await this.answerRepo.manager.query<
+      {
         id: string;
         minCorrectToPass: string | null;
         passed: boolean | null;
         correctCount: string;
         answeredCount: string;
-      }>();
-
-    const fallbackThreshold = resolveGeorgianExamRule({
-      categories: [categoryId],
-    }).minCorrectToPass;
-
-    const attemptIds = rows.map((row) => Number(row.id));
-    const earlyWrongByAttempt =
-      await this.loadEarlyWrongCounts(attemptIds);
-
-    return rows.map((row) => {
-      const id = Number(row.id);
-      return {
-        correctCount: Number(row.correctCount ?? 0),
-        minCorrectToPass: Number(row.minCorrectToPass ?? fallbackThreshold),
-        passed: row.passed === true,
-        answeredCount: Number(row.answeredCount ?? 0),
-        earlyWrongCount: earlyWrongByAttempt.get(id) ?? 0,
-      };
-    });
-  }
-
-  private async loadEarlyWrongCounts(
-    attemptIds: number[],
-  ): Promise<Map<number, number>> {
-    const map = new Map<number, number>();
-    if (attemptIds.length === 0) return map;
-
-    const rows = await this.answerRepo.manager.query<
-      { attemptId: string; earlyWrongCount: string }[]
+        earlyWrongCount: string;
+      }[]
     >(
       `
-      SELECT ranked."attemptId" AS "attemptId",
-             COUNT(*) FILTER (WHERE ranked.correct = false)::int AS "earlyWrongCount"
-      FROM (
-        SELECT a."attemptId",
-               a.correct,
-               ROW_NUMBER() OVER (
-                 PARTITION BY a."attemptId"
-                 ORDER BY a."createdAt" ASC, a.id ASC
-               ) AS rn
-        FROM user_answers a
-        WHERE a."attemptId" = ANY($1::int[])
-      ) ranked
-      WHERE ranked.rn <= $2
-      GROUP BY ranked."attemptId"
-      `,
-      [attemptIds, EARLY_FAIL_WINDOW],
-    );
-
-    for (const row of rows) {
-      map.set(Number(row.attemptId), Number(row.earlyWrongCount));
-    }
-    return map;
-  }
-
-  private async loadAnswerRowsForCategory(
-    userId: number,
-    categoryId: number | null,
-  ): Promise<{ subjectId: number; correct: boolean }[]> {
-    if (categoryId != null) {
-      const categoryFilter = categoryFilterJson(categoryId);
-      return this.answerRepo.manager.query<
-        { subjectId: number; correct: boolean }[]
-      >(
-        `
-        SELECT a.subject AS "subjectId", a.correct
-        FROM user_answers a
-        INNER JOIN exam_attempts t ON a."attemptId" = t.id
+      WITH recent AS (
+        SELECT t.id, t."minCorrectToPass", t.passed, t."completedAt"
+        FROM exam_attempts t
         WHERE t."userId" = $1
+          AND t."completedAt" IS NOT NULL
           AND ${attemptMatchesCategorySql('t', '$2', '$3')}
-          AND a.subject IS NOT NULL
-        `,
-        [userId, categoryFilter, categoryId],
-      );
-    }
-
-    return this.answerRepo.manager.query<
-      { subjectId: number; correct: boolean }[]
-    >(
-      `
-      SELECT a.subject AS "subjectId", a.correct
-      FROM user_answers a
-      INNER JOIN exam_attempts t ON a."attemptId" = t.id
-      WHERE t."userId" = $1
-        AND a.subject IS NOT NULL
+        ORDER BY t."completedAt" DESC
+        LIMIT $4
+      ),
+      answer_stats AS (
+        SELECT
+          a."attemptId" AS "attemptId",
+          SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::int AS "correctCount",
+          COUNT(*)::int AS "answeredCount"
+        FROM user_answers a
+        WHERE a."attemptId" IN (SELECT id FROM recent)
+        GROUP BY a."attemptId"
+      ),
+      early AS (
+        SELECT
+          ranked."attemptId" AS "attemptId",
+          COUNT(*) FILTER (WHERE ranked.correct = false)::int AS "earlyWrongCount"
+        FROM (
+          SELECT
+            a."attemptId",
+            a.correct,
+            ROW_NUMBER() OVER (
+              PARTITION BY a."attemptId"
+              ORDER BY a."createdAt" ASC, a.id ASC
+            ) AS rn
+          FROM user_answers a
+          WHERE a."attemptId" IN (SELECT id FROM recent)
+        ) ranked
+        WHERE ranked.rn <= $5
+        GROUP BY ranked."attemptId"
+      )
+      SELECT
+        r.id,
+        r."minCorrectToPass",
+        r.passed,
+        COALESCE(s."correctCount", 0)::text AS "correctCount",
+        COALESCE(s."answeredCount", 0)::text AS "answeredCount",
+        COALESCE(e."earlyWrongCount", 0)::text AS "earlyWrongCount"
+      FROM recent r
+      LEFT JOIN answer_stats s ON s."attemptId" = r.id
+      LEFT JOIN early e ON e."attemptId" = r.id
+      ORDER BY r."completedAt" DESC
       `,
-      [userId],
+      [
+        userId,
+        categoryFilter,
+        categoryId,
+        READINESS_MAX_ATTEMPTS,
+        EARLY_FAIL_WINDOW,
+      ],
     );
+
+    return rows.map((row) => ({
+      correctCount: Number(row.correctCount ?? 0),
+      minCorrectToPass: Number(row.minCorrectToPass ?? fallbackThreshold),
+      passed: row.passed === true,
+      answeredCount: Number(row.answeredCount ?? 0),
+      earlyWrongCount: Number(row.earlyWrongCount ?? 0),
+    }));
   }
 
-  private async loadDistinctQuestionsBySubject(
+  private async loadSubjectAggregatesForCategory(
     userId: number,
     categoryId: number,
-  ): Promise<Map<number, number>> {
+  ): Promise<
+    {
+      subjectId: number;
+      correctCount: number;
+      wrongCount: number;
+      distinctQuestions: number;
+    }[]
+  > {
     const categoryFilter = categoryFilterJson(categoryId);
     const rows = await this.answerRepo.manager.query<
-      { subjectId: number; count: string }[]
+      {
+        subjectId: string;
+        correctCount: string;
+        wrongCount: string;
+        distinctQuestions: string;
+      }[]
     >(
       `
-      SELECT a.subject AS "subjectId", COUNT(DISTINCT a."questionId")::int AS count
+      SELECT
+        a.subject AS "subjectId",
+        SUM(CASE WHEN a.correct = true THEN 1 ELSE 0 END)::int AS "correctCount",
+        SUM(CASE WHEN a.correct = false THEN 1 ELSE 0 END)::int AS "wrongCount",
+        COUNT(DISTINCT a."questionId")::int AS "distinctQuestions"
       FROM user_answers a
       INNER JOIN exam_attempts t ON a."attemptId" = t.id
       WHERE t."userId" = $1
-        AND ${attemptMatchesCategorySql('t', '$2', '$3')}
+        AND ${answerJoinedCategorySql('t', 'a', '$2', '$3')}
         AND a.subject IS NOT NULL
       GROUP BY a.subject
       `,
       [userId, categoryFilter, categoryId],
     );
 
-    return new Map(rows.map((r) => [Number(r.subjectId), Number(r.count)]));
+    return rows.map((row) => ({
+      subjectId: Number(row.subjectId),
+      correctCount: Number(row.correctCount),
+      wrongCount: Number(row.wrongCount),
+      distinctQuestions: Number(row.distinctQuestions),
+    }));
   }
 
   private async loadQuestionPoolExposure(
     userId: number,
     categoryId: number,
     lang: string,
-  ): Promise<UserStatsOverview['questionPool']> {
+  ): Promise<Omit<QuestionPoolResponse, 'categoryId'>> {
     const categoryFilter = categoryFilterJson(categoryId);
 
-    const [answeredRow, totalRow] = await Promise.all([
+    const [answeredRow, category] = await Promise.all([
       this.answerRepo.manager.query<{ count: string }[]>(
         `
         SELECT COUNT(DISTINCT a."questionId")::int AS count
         FROM user_answers a
         INNER JOIN exam_attempts t ON a."attemptId" = t.id
         WHERE t."userId" = $1
-          AND ${attemptMatchesCategorySql('t', '$2', '$3')}
+          AND ${answerJoinedCategorySql('t', 'a', '$2', '$3')}
         `,
         [userId, categoryFilter, categoryId],
       ),
-      this.questionRepo
+      this.categoryRepo.findOne({
+        where: { id: categoryId },
+        select: ['id', 'questionsCount'],
+      }),
+    ]);
+
+    let totalQuestionsInCategory = Number(category?.questionsCount ?? 0);
+    if (totalQuestionsInCategory <= 0) {
+      const totalRow = await this.questionRepo
         .createQueryBuilder('q')
         .select('COUNT(*)', 'count')
         .where('q.lang = :lang', { lang })
         .andWhere(':categoryId = ANY(q.categories)', { categoryId })
-        .getRawOne<{ count: string }>(),
-    ]);
+        .getRawOne<{ count: string }>();
+      totalQuestionsInCategory = Number(totalRow?.count ?? 0);
+    }
 
     const distinctQuestionsAnswered = Number(answeredRow[0]?.count ?? 0);
-    const totalQuestionsInCategory = Number(totalRow?.count ?? 0);
     const exposureRate =
       totalQuestionsInCategory > 0
         ? round3(distinctQuestionsAnswered / totalQuestionsInCategory)
@@ -715,6 +783,7 @@ export class UserStatsService {
   ): Promise<CategorySubjectRow[]> {
     const category = await this.categoryRepo.findOne({
       where: { id: categoryId },
+      select: ['id', 'subjects', 'questionsCount'],
     });
 
     if (category?.subjects?.length) {

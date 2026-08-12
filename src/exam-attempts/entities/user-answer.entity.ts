@@ -5,10 +5,14 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { ExamAttempt } from './exam-attempt.entity';
 
 @Entity('user_answers')
+@Index('idx_user_answers_attempt', ['attemptId'])
+@Index('idx_user_answers_attempt_subject', ['attemptId', 'subject'])
+@Index('idx_user_answers_question', ['questionId'])
 export class UserAnswer {
   @PrimaryGeneratedColumn()
   id: number;

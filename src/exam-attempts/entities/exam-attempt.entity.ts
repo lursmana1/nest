@@ -6,11 +6,13 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { UserAnswer } from './user-answer.entity';
 
 @Entity('exam_attempts')
+@Index('idx_exam_attempts_user_completed', ['userId', 'completedAt'])
 export class ExamAttempt {
   @PrimaryGeneratedColumn()
   id: number;

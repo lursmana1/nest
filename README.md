@@ -123,13 +123,21 @@ Returns `400 Insufficient questions` when the filtered pool is smaller than the 
 
 ### User statistics (authenticated)
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/user-stats/overview?category=1` | Dashboard bundle: readiness + subjects + weak areas + pool exposure |
-| `GET` | `/user-stats/readiness?category=1` | Readiness score (მზაობის ქულა) for a license category |
-| `GET` | `/user-stats/subject-progress?category=1` | All topics with attempted/correct/covered flags |
-| `GET` | `/user-stats/weak-questions?category=1` | Top wrong questions (optional `category`) |
-| `GET` | `/user-stats/weak-subjects?category=1` | Weakest subjects (optional `category`, full answer history) |
+| Method | Endpoint | When to call |
+|--------|----------|--------------|
+| `GET` | `/user-stats/summary?category=1` | **First paint** — tiny stats-grid payload (score, coverage, pool) |
+| `GET` | `/user-stats/readiness?category=1` | Detail / diagnostics (no deprecated alias fields) |
+| `GET` | `/user-stats/question-pool?category=1` | Only if you need pool alone (already in `summary`) |
+| `GET` | `/user-stats/subject-progress?category=1` | Subject picker screen (lazy) |
+| `GET` | `/user-stats/weak-questions?category=1` | Weak list below the fold (lazy) — compact `preview` only |
+| `GET` | `/user-stats/weak-subjects?category=1` | Weak topics below the fold (lazy) |
+
+**Do not** fire `readiness` + `question-pool` + `weak-questions` + `exam-attempts` on first paint — that blocks the main thread (TBT) while parsing several large JSON responses. Use:
+
+1. `GET /user-stats/summary?category=1` (+ cached `GET /users/me` / `GET /categories`) for the hero grid  
+2. Lazy-load `weak-questions`, `weak-subjects`, `exam-attempts` after first paint (Intersection Observer / route idle)
+
+`weak-questions` returns `{ questionId, wrongCount, totalAttempts, preview }` — no answer choices or explanations. Fetch `GET /questions/:id` only when the user opens a question.
 
 ## Exam rules (Georgia, 2026)
 
