@@ -2,9 +2,11 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { ExamAttempt } from './entities/exam-attempt.entity';
 import { UserAnswer } from './entities/user-answer.entity';
 import { Question } from '../questions/entities/question.entity';
@@ -23,9 +25,16 @@ import {
 import type {
   StartAttemptOptions,
   AttemptSummary,
+  AttemptHistoryCounts,
   PaginatedAttempts,
   RawAnswerRow,
 } from './types/exam-attempts.types.js';
+
+type AnswerStats = {
+  answeredCount: number;
+  correctCount: number;
+  lastAnswerAt: Date | null;
+};
 
 @Injectable()
 export class ExamAttemptsService {
@@ -45,7 +54,7 @@ export class ExamAttemptsService {
   ): Promise<{
     attemptId: number;
     endDate: Date;
-    questions: unknown[];
+    questions: Question[];
     questionCount: number;
     minCorrectToPass: number;
     categoryId: number | null;
@@ -61,26 +70,29 @@ export class ExamAttemptsService {
       count: examRule.questionCount,
     });
 
-    const attempt = this.attemptRepo.create({
-      userId,
-      questionIds,
-      lang,
-      minCorrectToPass: examRule.minCorrectToPass,
-      categories: options.categories ?? [],
-      subjects: options.subjects ?? [],
-    });
-    const saved = await this.attemptRepo.save(attempt);
-
+    const createdAt = new Date();
     const endDate = new Date(
-      saved.createdAt.getTime() + EXAM_DURATION_MINUTES * 60 * 1000,
+      createdAt.getTime() + EXAM_DURATION_MINUTES * 60 * 1000,
     );
-    await this.attemptRepo.update(saved.id, { endDate });
+
+    const saved = await this.attemptRepo.save(
+      this.attemptRepo.create({
+        userId,
+        questionIds,
+        lang,
+        createdAt,
+        endDate,
+        minCorrectToPass: examRule.minCorrectToPass,
+        categories: options.categories ?? [],
+        subjects: options.subjects ?? [],
+      }),
+    );
 
     const questions = await this.findQuestionsByIds(questionIds, lang);
 
     return {
       attemptId: saved.id,
-      endDate,
+      endDate: saved.endDate ?? endDate,
       questions,
       questionCount: examRule.questionCount,
       minCorrectToPass: examRule.minCorrectToPass,
@@ -95,20 +107,21 @@ export class ExamAttemptsService {
     chosenAnswer: string,
   ): Promise<{ correct: boolean }> {
     const attempt = await this.findAttemptForUser(attemptId, userId);
+    if (attempt.completedAt) {
+      throw new BadRequestException('Attempt already completed');
+    }
 
-    this.validateQuestionInAttempt(attempt, questionId);
+    this.assertAnswerable(attempt, questionId);
 
     const question = await this.questionRepo.findOne({
       where: { id: questionId, lang: attempt.lang },
     });
-
     if (!question) {
       throw new NotFoundException('Question not found');
     }
 
     const correct = question.correct_answer === chosenAnswer;
-
-    await this.answerRepo.save(
+    const savedAnswer = await this.answerRepo.save(
       this.answerRepo.create({
         attemptId,
         questionId,
@@ -118,24 +131,10 @@ export class ExamAttemptsService {
       }),
     );
 
-    const updatedAttempt = await this.findAttemptForUser(attemptId, userId);
-    const allAnswered =
-      updatedAttempt.answers.length >= updatedAttempt.questionIds.length;
-    if (allAnswered && !updatedAttempt.completedAt) {
-      const correctCount = updatedAttempt.answers.filter(
-        (a) => a.correct,
-      ).length;
-      const passed = this.evaluatePass(updatedAttempt, correctCount);
-      const completedAt = new Date();
-      const durationSeconds = this.computeAttemptDuration(
-        updatedAttempt,
-        completedAt,
-      );
-      await this.attemptRepo.update(attemptId, {
-        completedAt,
-        passed,
-        durationSeconds,
-      });
+    // Keep in-memory answers in sync — avoids a second full attempt reload.
+    attempt.answers = [...(attempt.answers ?? []), savedAnswer];
+    if (attempt.answers.length >= attempt.questionIds.length) {
+      await this.completeAttempt(attempt);
     }
 
     return { correct };
@@ -154,17 +153,7 @@ export class ExamAttemptsService {
       };
     }
 
-    const correctCount = attempt.answers.filter((a) => a.correct).length;
-    const passed = this.evaluatePass(attempt, correctCount);
-    const completedAt = new Date();
-    const durationSeconds = this.computeAttemptDuration(attempt, completedAt);
-    await this.attemptRepo.update(attemptId, {
-      completedAt,
-      passed,
-      durationSeconds,
-    });
-
-    return { completedAt, passed, durationSeconds };
+    return this.completeAttempt(attempt);
   }
 
   async getHistory(
@@ -175,63 +164,168 @@ export class ExamAttemptsService {
     const pageSize = Math.min(Math.max(1, size), MAX_HISTORY_PAGE_SIZE);
     const pageNum = Math.max(1, page);
 
-    const baseQb = this.attemptRepo
-      .createQueryBuilder('e')
-      .where('e.userId = :userId', { userId })
-      .andWhere(
-        'EXISTS (SELECT 1 FROM user_answers ua WHERE ua."attemptId" = e.id)',
-      );
-
-    const [attempts, total] = await Promise.all([
-      baseQb
-        .clone()
+    const [attempts, counts] = await Promise.all([
+      this.attemptsWithAnswersQb(userId)
         .orderBy('e.createdAt', 'DESC')
         .skip((pageNum - 1) * pageSize)
         .take(pageSize)
         .getMany(),
-      baseQb.clone().getCount(),
+      this.loadHistoryCounts(userId),
     ]);
 
-    const answerStats = await this.loadAnswerStats(
-      attempts.map((a) => a.id),
-    );
-
-    const totalPages = total === 0 ? 0 : Math.ceil(total / pageSize);
+    const answerStats = await this.loadAnswerStats(attempts.map((a) => a.id));
+    const totalPages =
+      counts.total === 0 ? 0 : Math.ceil(counts.total / pageSize);
 
     return {
       data: attempts.map((a) =>
         this.toAttemptSummary(a, answerStats.get(a.id)),
       ),
-      total,
+      total: counts.total,
       page: pageNum,
       pageSize,
       totalPages,
+      counts,
+    };
+  }
+
+  async getAttempt(userId: number, attemptId: number) {
+    const attempt = await this.findAttemptForUser(attemptId, userId);
+    const questions = await this.findQuestionsByIds(
+      attempt.questionIds,
+      attempt.lang,
+    );
+
+    return {
+      id: attempt.id,
+      questionIds: attempt.questionIds,
+      questions,
+      answers: attempt.answers,
+      createdAt: attempt.createdAt,
+      endDate: attempt.endDate,
+      completedAt: attempt.completedAt,
+      passed: attempt.passed,
+      durationSeconds: this.resolveDisplayDuration(attempt),
+      minCorrectToPass: attempt.minCorrectToPass,
+      categories: attempt.categories,
+      subjects: attempt.subjects,
+    };
+  }
+
+  async getRawAnswers(
+    userId: number,
+    limit = MAX_STATS_LIMIT,
+  ): Promise<RawAnswerRow[]> {
+    const rows = await this.answerRepo
+      .createQueryBuilder('a')
+      .innerJoin('a.attempt', 't')
+      .select('a.questionId', 'questionId')
+      .addSelect('a.subject', 'subject')
+      .addSelect('a.correct', 'correct')
+      .addSelect('a.chosenAnswer', 'chosenAnswer')
+      .addSelect('a.createdAt', 'createdAt')
+      .where('t.userId = :userId', { userId })
+      .orderBy('a.createdAt', 'DESC')
+      .take(limit)
+      .getRawMany<{
+        questionId: string;
+        subject: string | null;
+        correct: boolean | string;
+        chosenAnswer: string;
+        createdAt: Date | string;
+      }>();
+
+    return rows.map((a) => ({
+      questionId: Number(a.questionId),
+      subject: a.subject == null ? null : Number(a.subject),
+      correct: a.correct === true || a.correct === 't' || a.correct === 'true',
+      chosenAnswer: a.chosenAnswer,
+      createdAt: new Date(a.createdAt),
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private
+  // ---------------------------------------------------------------------------
+
+  private async completeAttempt(attempt: ExamAttempt): Promise<{
+    completedAt: Date;
+    passed: boolean;
+    durationSeconds: number;
+  }> {
+    const correctCount = (attempt.answers ?? []).filter((a) => a.correct).length;
+    const passed = this.evaluatePass(attempt, correctCount);
+    const completedAt = new Date();
+    const durationSeconds = this.computeAttemptDuration(attempt, completedAt);
+
+    await this.attemptRepo.update(attempt.id, {
+      completedAt,
+      passed,
+      durationSeconds,
+    });
+
+    attempt.completedAt = completedAt;
+    attempt.passed = passed;
+    attempt.durationSeconds = durationSeconds;
+
+    return { completedAt, passed, durationSeconds };
+  }
+
+  private attemptsWithAnswersQb(
+    userId: number,
+  ): SelectQueryBuilder<ExamAttempt> {
+    return this.attemptRepo
+      .createQueryBuilder('e')
+      .where('e.userId = :userId', { userId })
+      .andWhere(
+        'EXISTS (SELECT 1 FROM user_answers ua WHERE ua."attemptId" = e.id)',
+      );
+  }
+
+  private async loadHistoryCounts(
+    userId: number,
+  ): Promise<AttemptHistoryCounts> {
+    const row = await this.attemptsWithAnswersQb(userId)
+      .select('COUNT(*)', 'total')
+      .addSelect(
+        `SUM(CASE WHEN e.completedAt IS NOT NULL AND e.passed = true THEN 1 ELSE 0 END)`,
+        'passed',
+      )
+      .addSelect(
+        `SUM(CASE WHEN e.completedAt IS NOT NULL AND e.passed = false THEN 1 ELSE 0 END)`,
+        'failed',
+      )
+      .addSelect(
+        `SUM(CASE WHEN e.completedAt IS NULL THEN 1 ELSE 0 END)`,
+        'incomplete',
+      )
+      .getRawOne<{
+        total: string;
+        passed: string;
+        failed: string;
+        incomplete: string;
+      }>();
+
+    const total = Number(row?.total ?? 0);
+    const passed = Number(row?.passed ?? 0);
+    const failed = Number(row?.failed ?? 0);
+    const incomplete = Number(row?.incomplete ?? 0);
+    const completed = passed + failed;
+
+    return {
+      total,
+      passed,
+      failed,
+      incomplete,
+      passRate: completed > 0 ? Math.round((passed / completed) * 100) : 0,
     };
   }
 
   private async loadAnswerStats(
     attemptIds: number[],
-  ): Promise<
-    Map<
-      number,
-      {
-        answeredCount: number;
-        correctCount: number;
-        lastAnswerAt: Date | null;
-      }
-    >
-  > {
-    const map = new Map<
-      number,
-      {
-        answeredCount: number;
-        correctCount: number;
-        lastAnswerAt: Date | null;
-      }
-    >();
-    if (attemptIds.length === 0) {
-      return map;
-    }
+  ): Promise<Map<number, AnswerStats>> {
+    const map = new Map<number, AnswerStats>();
+    if (attemptIds.length === 0) return map;
 
     const rows = await this.answerRepo
       .createQueryBuilder('a')
@@ -262,57 +356,19 @@ export class ExamAttemptsService {
     return map;
   }
 
-  async getAttempt(userId: number, attemptId: number) {
-    const attempt = await this.findAttemptForUser(attemptId, userId);
-
-    const questions = await this.findQuestionsByIds(
-      attempt.questionIds,
-      attempt.lang,
-    );
-
-    return {
-      id: attempt.id,
-      questionIds: attempt.questionIds,
-      questions,
-      answers: attempt.answers,
-      createdAt: attempt.createdAt,
-      endDate: attempt.endDate,
-      completedAt: attempt.completedAt,
-      passed: attempt.passed,
-      durationSeconds: this.resolveDisplayDuration(attempt),
-      minCorrectToPass: attempt.minCorrectToPass,
-      categories: attempt.categories,
-      subjects: attempt.subjects,
-    };
-  }
-
-  async getRawAnswers(
-    userId: number,
-    limit = MAX_STATS_LIMIT,
-  ): Promise<RawAnswerRow[]> {
-    const answers = await this.answerRepo.find({
-      where: { attempt: { userId } },
-      relations: ['attempt'],
-      order: { createdAt: 'DESC' },
-      take: limit,
-    });
-
-    return answers.map((a) => ({
-      questionId: a.questionId,
-      subject: a.subject,
-      correct: a.correct,
-      chosenAnswer: a.chosenAnswer,
-      createdAt: a.createdAt,
-    }));
-  }
-
-  private async findQuestionsByIds(ids: number[], lang: string) {
+  /** Preserve ticket order from `questionIds` (IN-query order is undefined). */
+  private async findQuestionsByIds(
+    ids: number[],
+    lang: string,
+  ): Promise<Question[]> {
     if (!ids.length) return [];
-    return this.questionRepo
+    const rows = await this.questionRepo
       .createQueryBuilder('q')
       .where('q.lang = :lang', { lang })
       .andWhere('q.id IN (:...ids)', { ids })
       .getMany();
+    const byId = new Map(rows.map((q) => [q.id, q]));
+    return ids.map((id) => byId.get(id)).filter((q): q is Question => q != null);
   }
 
   private async findAttemptForUser(
@@ -329,22 +385,18 @@ export class ExamAttemptsService {
     return attempt;
   }
 
-  private validateQuestionInAttempt(
-    attempt: ExamAttempt,
-    questionId: number,
-  ): void {
+  private assertAnswerable(attempt: ExamAttempt, questionId: number): void {
     if (!attempt.questionIds.includes(questionId)) {
       throw new ForbiddenException('Question not in this attempt');
     }
-    if (attempt.answers.some((a) => a.questionId === questionId)) {
-      throw new ForbiddenException('Already answered this question');
+    if (attempt.answers?.some((a) => a.questionId === questionId)) {
+      throw new ConflictException('Already answered this question');
     }
   }
 
   private evaluatePass(attempt: ExamAttempt, correctCount: number): boolean {
-    const threshold = attempt.minCorrectToPass;
-    if (threshold != null) {
-      return isExamPassed(correctCount, threshold);
+    if (attempt.minCorrectToPass != null) {
+      return isExamPassed(correctCount, attempt.minCorrectToPass);
     }
 
     const fallback = resolveGeorgianExamRule({
@@ -356,8 +408,7 @@ export class ExamAttemptsService {
 
   /**
    * Actual time spent answering: last answer − start.
-   * Cap only as a safety max (official exam length), never return the full limit
-   * just because the attempt was finished late.
+   * Cap at official exam length only as a safety max.
    */
   private computeAttemptDuration(
     attempt: ExamAttempt,
@@ -365,21 +416,19 @@ export class ExamAttemptsService {
     lastAnswerAt?: Date | number | null,
   ): number {
     const startedAt = attempt.createdAt.getTime();
-    const lastAnswerMs =
-      typeof lastAnswerAt === 'number'
-        ? lastAnswerAt
-        : lastAnswerAt instanceof Date
-          ? lastAnswerAt.getTime()
-          : this.latestAnswerTime(attempt.answers);
-
+    const lastAnswerMs = this.toEpochMs(lastAnswerAt) ?? this.latestAnswerTime(attempt.answers);
     const endedAt = lastAnswerMs ?? completedAt.getTime();
     const rawSeconds = Math.max(0, Math.round((endedAt - startedAt) / 1000));
     return Math.min(rawSeconds, EXAM_DURATION_MINUTES * 60);
   }
 
-  private latestAnswerTime(
-    answers: UserAnswer[] | undefined,
-  ): number | null {
+  private toEpochMs(value?: Date | number | null): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (value instanceof Date) return value.getTime();
+    return null;
+  }
+
+  private latestAnswerTime(answers: UserAnswer[] | undefined): number | null {
     if (!answers?.length) return null;
     let latest = 0;
     for (const answer of answers) {
@@ -393,32 +442,27 @@ export class ExamAttemptsService {
     attempt: ExamAttempt,
     lastAnswerAt?: Date | null,
   ): number | null {
-    if (!attempt.completedAt) {
-      return null;
-    }
+    if (!attempt.completedAt) return null;
 
-    if (lastAnswerAt || attempt.answers?.length) {
-      return this.computeAttemptDuration(
-        attempt,
-        attempt.completedAt,
-        lastAnswerAt,
-      );
-    }
-
-    if (attempt.durationSeconds != null) {
+    // Prefer persisted duration when we have no answer timestamps to recompute from.
+    if (
+      attempt.durationSeconds != null &&
+      !lastAnswerAt &&
+      !attempt.answers?.length
+    ) {
       return Math.min(attempt.durationSeconds, EXAM_DURATION_MINUTES * 60);
     }
 
-    return this.computeAttemptDuration(attempt, attempt.completedAt);
+    return this.computeAttemptDuration(
+      attempt,
+      attempt.completedAt,
+      lastAnswerAt,
+    );
   }
 
   private toAttemptSummary(
     attempt: ExamAttempt,
-    stats?: {
-      answeredCount: number;
-      correctCount: number;
-      lastAnswerAt?: Date | null;
-    },
+    stats?: AnswerStats,
   ): AttemptSummary {
     return {
       id: attempt.id,

@@ -111,7 +111,7 @@ Language: `?lang=ka|ru|en` or `Accept-Language` header.
 | `POST` | `/exam-attempts/start?categories=0&lang=ka` | Start exam (personalized selection) |
 | `POST` | `/exam-attempts/:id/answer` | Submit answer `{ questionId, chosenAnswer }` |
 | `POST` | `/exam-attempts/:id/finish` | Finish attempt early |
-| `GET` | `/exam-attempts` | Attempt history (`?page=1&size=10` or `?limit=10`) |
+| `GET` | `/exam-attempts` | Attempt history (`?page=1&size=10`). Includes `counts` for all attempts (passed/failed/incomplete/passRate) — do not derive those from `data` alone. |
 | `GET` | `/exam-attempts/:id` | Attempt detail |
 | `GET` | `/exam-attempts/stats?limit=1000` | Raw answer log |
 

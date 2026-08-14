@@ -82,8 +82,11 @@ function prepareGeorgianText(text: string): string {
     '20': 'ოცი',
   };
   return text
+    .replace(/^\s*გამარჯობა[!.,:;]?\s*/i, '')
+    .replace(/\bგამარჯობა[!.,:;]?\s*/gi, '')
     .replace(/\b(\d+)\b/g, (m) => numMap[m] || m)
     .replace(/\//g, ' პროცენტი ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
