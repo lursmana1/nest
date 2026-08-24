@@ -55,6 +55,9 @@ docs/seo/
 problematic-question-ids.csv
 problematic-question-ids.json
 
+# Local S3 audio dump + WebM conversions (do not commit)
+/audio-local/
+
 # temp directory
 .temp
 .tmp

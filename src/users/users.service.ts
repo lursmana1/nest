@@ -17,7 +17,7 @@ export class UsersService {
     return await this.usersRepository.save(user);
   }
 
-  async findAll(): Promise<any[]> {
+  async findAll(): Promise<User[]> {
     return await this.usersRepository.find();
   }
 

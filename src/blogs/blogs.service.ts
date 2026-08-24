@@ -54,14 +54,14 @@ export class BlogsService {
     const [blogs, total] = await this.blogsRepository.findAndCount({
       relations: ['creator'],
       order: { createdAt: 'DESC' },
-      skip: (page - 1) * PAGE_SIZE,
+      skip: (pageNum - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     });
     const totalPages = Math.ceil(total / PAGE_SIZE);
     return {
       data: blogs.map((b) => this.mapCreator(b)),
       total,
-      page,
+      page: pageNum,
       totalPages,
     };
   }

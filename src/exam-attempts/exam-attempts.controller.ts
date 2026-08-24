@@ -38,8 +38,8 @@ export class ExamAttemptsController {
   @Get('rules')
   getExamRules(@Query('category') category?: string) {
     if (category == null || category.trim() === '') {
-      return Object.entries(GEORGIAN_EXAM_RULES_BY_CATEGORY).map(
-        ([id, rule]) => formatExamRuleResponse(Number(id), rule),
+      return Object.entries(GEORGIAN_EXAM_RULES_BY_CATEGORY).map(([id, rule]) =>
+        formatExamRuleResponse(Number(id), rule),
       );
     }
 
@@ -126,10 +126,7 @@ export class ExamAttemptsController {
     return this.attemptsService.getHistory(
       req.user.userId,
       Math.max(1, page ?? 1),
-      Math.min(
-        MAX_HISTORY_PAGE_SIZE,
-        Math.max(1, pageSize),
-      ),
+      Math.min(MAX_HISTORY_PAGE_SIZE, Math.max(1, pageSize)),
     );
   }
 

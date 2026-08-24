@@ -42,9 +42,7 @@ export class QuestionSamplingService {
   ): Promise<number[]> {
     if (limit <= 0) return [];
 
-    const qb = this.questionRepo
-      .createQueryBuilder('q')
-      .select('q.id', 'id');
+    const qb = this.questionRepo.createQueryBuilder('q').select('q.id', 'id');
     applyQuestionFilters(qb, 'q', filter);
 
     if (exclude.length) {
@@ -88,12 +86,7 @@ export class QuestionSamplingService {
       weakness;
 
     const [mistakeRows, successRows] = await Promise.all([
-      this.sampleMistakeIds(
-        filter,
-        mistakeIds,
-        mistakeSubjects,
-        mistakesCount,
-      ),
+      this.sampleMistakeIds(filter, mistakeIds, mistakeSubjects, mistakesCount),
       this.sampleSuccessIds(
         filter,
         mistakeIds,
@@ -116,9 +109,7 @@ export class QuestionSamplingService {
     const hasMistakes = mistakeIds.length > 0 || mistakeSubjects.length > 0;
     if (!hasMistakes) return [];
 
-    const qb = this.questionRepo
-      .createQueryBuilder('q')
-      .select('q.id', 'id');
+    const qb = this.questionRepo.createQueryBuilder('q').select('q.id', 'id');
     applyQuestionFilters(qb, 'q', filter);
 
     const orParts: string[] = [];
@@ -150,9 +141,7 @@ export class QuestionSamplingService {
     const hasSuccess = successIds.length > 0 || successSubjects.length > 0;
     if (!hasSuccess) return [];
 
-    const qb = this.questionRepo
-      .createQueryBuilder('q')
-      .select('q.id', 'id');
+    const qb = this.questionRepo.createQueryBuilder('q').select('q.id', 'id');
     applyQuestionFilters(qb, 'q', filter);
 
     if (mistakeIds.length) {

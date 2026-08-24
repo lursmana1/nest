@@ -2,6 +2,7 @@ import {
   aggregateSubjectCounts,
   buildSubjectProgressRows,
   isSubjectCovered,
+  isQuestionStatCorrect,
 } from './user-stats-query.util';
 
 describe('subject coverage', () => {
@@ -36,5 +37,21 @@ describe('subject coverage', () => {
     );
     expect(high[0].covered).toBe(true);
     expect(high[0].coverageRate).toBeCloseTo(0.7, 2);
+  });
+});
+
+describe('isQuestionStatCorrect (≥60% of answers on that id)', () => {
+  it('counts as mistake when mostly wrong even if last was right (3/10)', () => {
+    expect(isQuestionStatCorrect(3, 10)).toBe(false);
+  });
+
+  it('counts as correct when ≥60% right (6/10, 7/10)', () => {
+    expect(isQuestionStatCorrect(6, 10)).toBe(true);
+    expect(isQuestionStatCorrect(7, 10)).toBe(true);
+  });
+
+  it('single wrong → mistake; single correct → correct', () => {
+    expect(isQuestionStatCorrect(0, 1)).toBe(false);
+    expect(isQuestionStatCorrect(1, 1)).toBe(true);
   });
 });

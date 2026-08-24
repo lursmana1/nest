@@ -41,11 +41,7 @@ export class UserStatsController {
   ) {
     this.assertCategory(category);
     const lang = parseLang(undefined, acceptLanguage);
-    return this.userStatsService.getReadiness(
-      req.user.userId,
-      category,
-      lang,
-    );
+    return this.userStatsService.getReadiness(req.user.userId, category, lang);
   }
 
   /** Per-topic progress for subject picker (all subjects, including untouched). */

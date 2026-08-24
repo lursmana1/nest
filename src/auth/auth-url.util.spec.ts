@@ -1,6 +1,5 @@
 import {
   assertGoogleOAuthConfig,
-  resolveApiPublicUrl,
   resolveGoogleCallbackUrl,
   resolveGoogleLoginUrl,
 } from './auth-url.util';
@@ -23,7 +22,9 @@ describe('auth-url.util', () => {
     expect(resolveGoogleCallbackUrl()).toBe(
       'https://api.prava.ucos.ge/auth/google/callback',
     );
-    expect(resolveGoogleLoginUrl()).toBe('https://api.prava.ucos.ge/auth/google');
+    expect(resolveGoogleLoginUrl()).toBe(
+      'https://api.prava.ucos.ge/auth/google',
+    );
   });
 
   it('prefers explicit GOOGLE_CALLBACK_URL', () => {

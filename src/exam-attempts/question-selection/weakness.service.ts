@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserAnswer } from '../entities/user-answer.entity';
+import { PracticeAnswer } from '../../practice-answers/entities/practice-answer.entity';
 import {
   MAX_HISTORY_FOR_WEIGHTING,
   MAX_WEAKNESS_IDS_CAP,
@@ -11,8 +12,10 @@ import type { WeaknessIds } from './selection.types.js';
 
 /**
  * Computes user weakness from answer history (Postgres).
- * Question-level weakness: wrong vs right balance.
- * Subject-level weakness: correctness rate with minimum sample size.
+ * Includes timed-exam answers + graded practice_answers (tickets/trainer).
+ * Question-level: net wrong−right balance in recent history.
+ * Subject-level: correctness rate vs SUBJECT_PASS_RATE (0.5) with min sample.
+ * (Profile subject cards use QUESTION_MASTERY_CORRECT_RATIO 0.6 — different product surface.)
  */
 @Injectable()
 export class WeaknessService {
@@ -21,30 +24,97 @@ export class WeaknessService {
   constructor(
     @InjectRepository(UserAnswer)
     private readonly userAnswerRepo: Repository<UserAnswer>,
+    @InjectRepository(PracticeAnswer)
+    private readonly practiceRepo: Repository<PracticeAnswer>,
   ) {}
 
   async getTotalAnswerCount(userId: number): Promise<number> {
-    return this.userAnswerRepo.count({
-      where: { attempt: { userId } },
-    });
+    const [examCount, practiceCount] = await Promise.all([
+      this.userAnswerRepo
+        .createQueryBuilder('a')
+        .innerJoin('a.attempt', 't')
+        .innerJoin(
+          'questions',
+          'lq',
+          'lq.id = a.questionId AND lq.lang = t.lang',
+        )
+        .where('t.userId = :userId', { userId })
+        .getCount(),
+      this.practiceRepo
+        .createQueryBuilder('p')
+        .innerJoin(
+          'questions',
+          'lq',
+          'lq.id = p.questionId AND lq.lang = p.lang',
+        )
+        .where('p.userId = :userId', { userId })
+        .andWhere('p.correct IS NOT NULL')
+        .getCount(),
+    ]);
+    return examCount + practiceCount;
   }
 
   async getWeaknessIds(userId: number): Promise<WeaknessIds> {
-    const rows = await this.userAnswerRepo
-      .createQueryBuilder('a')
-      .innerJoin('a.attempt', 't')
-      .where('t.userId = :userId', { userId })
-      .select(['a.questionId', 'a.subject', 'a.correct'])
-      .orderBy('a.createdAt', 'DESC')
-      .limit(MAX_HISTORY_FOR_WEIGHTING)
-      .getRawMany<{
-        a_questionId: number;
-        a_subject: number;
-        a_correct: boolean;
-      }>();
+    const half = Math.ceil(MAX_HISTORY_FOR_WEIGHTING / 2);
+    const [examRows, practiceRows] = await Promise.all([
+      this.userAnswerRepo
+        .createQueryBuilder('a')
+        .innerJoin('a.attempt', 't')
+        .innerJoin(
+          'questions',
+          'lq',
+          'lq.id = a.questionId AND lq.lang = t.lang',
+        )
+        .where('t.userId = :userId', { userId })
+        .select(['a.questionId', 'a.subject', 'a.correct', 'a.createdAt'])
+        .orderBy('a.createdAt', 'DESC')
+        .limit(half)
+        .getRawMany<{
+          a_questionId: number | string;
+          a_subject: number | string | null;
+          a_correct: boolean | string | null;
+          a_createdAt: Date | string;
+        }>(),
+      this.practiceRepo
+        .createQueryBuilder('p')
+        .innerJoin(
+          'questions',
+          'lq',
+          'lq.id = p.questionId AND lq.lang = p.lang',
+        )
+        .where('p.userId = :userId', { userId })
+        .andWhere('p.correct IS NOT NULL')
+        .select('p.questionId', 'a_questionId')
+        .addSelect('COALESCE(p.subject, lq.subject)', 'a_subject')
+        .addSelect('p.correct', 'a_correct')
+        .addSelect('p.updatedAt', 'a_createdAt')
+        .orderBy('p.updatedAt', 'DESC')
+        .limit(half)
+        .getRawMany<{
+          a_questionId: number | string;
+          a_subject: number | string | null;
+          a_correct: boolean | string | null;
+          a_createdAt: Date | string;
+        }>(),
+    ]);
+
+    const merged = [...examRows, ...practiceRows]
+      .filter((r) => r.a_subject != null && r.a_correct != null)
+      .map((r) => ({
+        a_questionId: Number(r.a_questionId),
+        a_subject: Number(r.a_subject),
+        a_correct:
+          r.a_correct === true || r.a_correct === 't' || r.a_correct === 'true',
+        a_createdAt: r.a_createdAt,
+      }))
+      .sort(
+        (a, b) =>
+          new Date(b.a_createdAt).getTime() - new Date(a.a_createdAt).getTime(),
+      )
+      .slice(0, MAX_HISTORY_FOR_WEIGHTING);
 
     const { mistakeIds, successIds, mistakeSubjects, successSubjects } =
-      this.computeWeaknessFromRows(rows);
+      this.computeWeaknessFromRows(merged);
 
     return {
       mistakeIds: mistakeIds.slice(0, MAX_WEAKNESS_IDS_CAP),
@@ -58,14 +128,21 @@ export class WeaknessService {
     rows: { a_questionId: number; a_subject: number; a_correct: boolean }[],
   ): WeaknessIds {
     type SubjectStat = { correct: number; wrong: number };
-    type SubjectScore = { subject: number; total: number; correctnessRate: number };
+    type SubjectScore = {
+      subject: number;
+      total: number;
+      correctnessRate: number;
+    };
 
     const bySubject = new Map<number, SubjectStat>();
     const byQuestion = new Map<number, number>();
 
     for (const r of rows) {
       const delta = r.a_correct ? -1 : 1;
-      const subjectStat = bySubject.get(r.a_subject) ?? { correct: 0, wrong: 0 };
+      const subjectStat = bySubject.get(r.a_subject) ?? {
+        correct: 0,
+        wrong: 0,
+      };
       if (r.a_correct) subjectStat.correct += 1;
       else subjectStat.wrong += 1;
       bySubject.set(r.a_subject, subjectStat);
@@ -86,11 +163,8 @@ export class WeaknessService {
     }
     const eligibleSubjects: SubjectScore[] = [...bySubject.entries()]
       .map(([subject, stat]) => this.toSubjectScore(subject, stat))
-      .filter(
-        ({ total }) => total >= MIN_SUBJECT_ATTEMPTS_FOR_STATS,
-      );
+      .filter(({ total }) => total >= MIN_SUBJECT_ATTEMPTS_FOR_STATS);
 
-    // Sort once by weakness (lower correctness first), tie-break by sample size.
     const byWeakness = [...eligibleSubjects].sort((a, b) => {
       if (a.correctnessRate !== b.correctnessRate) {
         return a.correctnessRate - b.correctnessRate;
@@ -103,7 +177,6 @@ export class WeaknessService {
       }
     }
 
-    // Reuse the same ordering in reverse to rank strengths.
     for (let i = byWeakness.length - 1; i >= 0; i--) {
       const item = byWeakness[i];
       if (item.correctnessRate > WeaknessService.SUBJECT_PASS_RATE) {

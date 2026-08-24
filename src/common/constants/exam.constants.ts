@@ -37,14 +37,21 @@ export const MIN_SUBJECT_ATTEMPTS_FOR_STATS = 10;
  */
 export const SUBJECT_COVERAGE_RATIO = 0.7;
 
-/** Completed attempts used for readiness exam accuracy (most recent first). */
-export const READINESS_MAX_ATTEMPTS = 10;
+/**
+ * Per questionId: count as "correct" for subject cards only if
+ * correctAnswers / totalAnswers ≥ this ratio; otherwise count as mistake.
+ * Example: 3/10 correct (30%) → mistake even if the last answer was right.
+ */
+export const QUESTION_MASTERY_CORRECT_RATIO = 0.6;
+
+/** Completed attempts used for readiness exam + recent answer accuracy (most recent first). */
+export const READINESS_MAX_ATTEMPTS = 20;
 
 /** Readiness score >= this + last pass + topic coverage → readyForExam. */
-export const READINESS_READY_SCORE_THRESHOLD = 70;
+export const READINESS_READY_SCORE_THRESHOLD = 90;
 
-/** Minimum share of topics covered for readyForExam. */
-export const READINESS_READY_PRACTICE_THRESHOLD = 0.7;
+/** Minimum share of topics covered for readyForExam (not full bank). */
+export const READINESS_READY_PRACTICE_THRESHOLD = 0.4;
 
 /** Max page size for history. */
 export const MAX_HISTORY_PAGE_SIZE = 50;

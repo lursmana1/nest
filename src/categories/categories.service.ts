@@ -17,7 +17,7 @@ export class CategoriesService {
     private readonly categoryRepo: Repository<Category>,
   ) {}
 
-  create(createCategoryDto: CreateCategoryDto) {
+  create(_createCategoryDto: CreateCategoryDto) {
     return 'This action adds a new category';
   }
 
@@ -40,13 +40,7 @@ export class CategoriesService {
   async findAll() {
     const rows = await this.categoryRepo.find({
       order: { id: 'ASC' },
-      select: [
-        'id',
-        'name',
-        'iconKey',
-        'questionsCount',
-        'subjectCount',
-      ],
+      select: ['id', 'name', 'iconKey', 'questionsCount', 'subjectCount'],
     });
     return rows.map((row) => this.withExamRules(row));
   }
@@ -64,7 +58,7 @@ export class CategoriesService {
     };
   }
 
-  update(id: number, updateCategoryDto: UpdateCategoryDto) {
+  update(id: number, _updateCategoryDto: UpdateCategoryDto) {
     return `This action updates a #${id} category`;
   }
 

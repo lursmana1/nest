@@ -74,32 +74,26 @@ export function answerJoinedCategorySql(
   )`;
 }
 
-export function answerJoinedCategoryWhere(
-  attemptAlias: string,
-  answerAlias: string,
-  categoryFilterParam = 'categoryFilter',
-  categoryIdParam = 'categoryId',
-): string {
-  return `(
-    ${attemptAlias}.categories @> :${categoryFilterParam}::jsonb
-    OR (
-      COALESCE(jsonb_array_length(${attemptAlias}.categories), 0) = 0
-      AND EXISTS (
-        SELECT 1
-        FROM questions q
-        WHERE q.id = ${answerAlias}.questionId
-          AND q.lang = ${attemptAlias}.lang
-          AND :${categoryIdParam} = ANY(q.categories)
-      )
-    )
-  )`;
-}
-
-export function attemptCategoryMatchParams(
-  categoryId: number,
-): { categoryFilter: string; categoryId: number } {
+export function attemptCategoryMatchParams(categoryId: number): {
+  categoryFilter: string;
+  categoryId: number;
+} {
   return {
     categoryFilter: categoryFilterJson(categoryId),
     categoryId,
   };
+}
+
+/**
+ * Keep only answers whose question still exists in live `questions`
+ * (archived IDs live in `questions_archived` and must not affect stats).
+ */
+export function liveQuestionJoinSql(
+  answerAlias: string,
+  attemptAlias: string,
+  questionAlias = 'lq',
+): string {
+  return `INNER JOIN questions ${questionAlias}
+    ON ${questionAlias}.id = ${answerAlias}."questionId"
+   AND ${questionAlias}.lang = ${attemptAlias}.lang`;
 }

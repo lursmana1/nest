@@ -12,6 +12,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { UsersModule } from './users/users.module';
 import { UserStatsModule } from './user-stats/user-stats.module';
 import { QuestionSyncModule } from './question-sync/question-sync.module';
+import { PracticeAnswersModule } from './practice-answers/practice-answers.module';
 import { buildTypeOrmOptions } from './config/typeorm.config';
 
 @Module({
@@ -27,6 +28,7 @@ import { buildTypeOrmOptions } from './config/typeorm.config';
     CategoriesModule,
     ExamsModule,
     ExamAttemptsModule,
+    PracticeAnswersModule,
     LeaderboardModule,
     QuestionsModule,
     UploadsModule,

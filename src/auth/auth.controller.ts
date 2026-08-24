@@ -7,7 +7,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -19,19 +19,22 @@ import {
   resolveGoogleLoginUrl,
 } from './auth-url.util';
 
-function getCookieOptions() {
+function getCookieOptions(): CookieOptions {
   const isProduction = process.env.NODE_ENV === 'production';
   return {
     httpOnly: true,
     // Cross-origin SPA (frontend on Vercel, API on Render) needs SameSite=None.
-    sameSite: (isProduction ? 'none' : 'lax') as 'none' | 'lax',
+    sameSite: isProduction ? 'none' : 'lax',
     secure: isProduction,
     path: '/',
     maxAge: 7 * 24 * 60 * 60 * 1000,
   };
 }
 
-function appendAccessTokenToRedirect(baseUrl: string, accessToken: string): string {
+function appendAccessTokenToRedirect(
+  baseUrl: string,
+  accessToken: string,
+): string {
   try {
     const url = new URL(baseUrl);
     url.searchParams.set('access_token', accessToken);
@@ -78,7 +81,9 @@ export class AuthController {
     res.cookie('access_token', result.access_token, getCookieOptions());
 
     const redirectBase = process.env.GOOGLE_REDIRECT_AFTER_LOGIN || '/';
-    res.redirect(appendAccessTokenToRedirect(redirectBase, result.access_token));
+    res.redirect(
+      appendAccessTokenToRedirect(redirectBase, result.access_token),
+    );
   }
 
   @Post('register')

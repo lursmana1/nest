@@ -45,6 +45,7 @@ export class ExamsController {
       subjects: parseIdList(subjects),
       categories: parseIdList(categories),
       count: parseCount(count),
+      allSubjects: allSubjects === 'true',
     });
   }
 

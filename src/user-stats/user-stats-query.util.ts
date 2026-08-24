@@ -2,7 +2,9 @@ import type { CategorySubjectRow } from '../categories/entities/category.entity'
 import {
   SUBJECT_COVERAGE_RATIO,
   MIN_SUBJECT_ATTEMPTS_FOR_STATS,
+  QUESTION_MASTERY_CORRECT_RATIO,
 } from '../common/constants/exam.constants.js';
+import { round3 } from '../common/utils/round3.util.js';
 
 export type SubjectCountRow = {
   subjectId: number;
@@ -18,6 +20,7 @@ export type SubjectProgressRow = SubjectCountRow & {
   covered: boolean;
   mastered: boolean;
   totalQuestions: number;
+  /** Unique questions with a graded answer (last attempt wins for correct/wrong). */
   distinctQuestionsAnswered: number;
   coverageRate: number;
 };
@@ -38,6 +41,19 @@ export function isSubjectMastered(
   minMasteryAttempts: number = MIN_SUBJECT_ATTEMPTS_FOR_STATS,
 ): boolean {
   return attempted >= minMasteryAttempts && correctnessRate >= passRate;
+}
+
+/**
+ * One logical question → correct on subject card only if enough history is right.
+ * e.g. 3/10 correct → false (mistake); 7/10 → true.
+ */
+export function isQuestionStatCorrect(
+  correctAnswers: number,
+  totalAnswers: number,
+  ratio: number = QUESTION_MASTERY_CORRECT_RATIO,
+): boolean {
+  if (totalAnswers <= 0) return false;
+  return correctAnswers / totalAnswers >= ratio;
 }
 
 export function aggregateSubjectCounts(
@@ -75,8 +91,7 @@ export function buildSubjectProgressRows(
       wrongCount: 0,
     };
     const attempted = counts.correctCount + counts.wrongCount;
-    const correctnessRate =
-      attempted > 0 ? counts.correctCount / attempted : 0;
+    const correctnessRate = attempted > 0 ? counts.correctCount / attempted : 0;
     const distinctQuestionsAnswered = distinctBySubject.get(subject.id) ?? 0;
     const totalQuestions = subject.questionsCount;
     const coverageRate =
@@ -105,8 +120,4 @@ export function buildSubjectProgressRows(
       coverageRate: round3(coverageRate),
     };
   });
-}
-
-function round3(value: number): number {
-  return Math.round(value * 1000) / 1000;
 }

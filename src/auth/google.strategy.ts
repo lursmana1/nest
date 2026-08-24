@@ -8,17 +8,17 @@ import {
 } from './auth-url.util';
 
 @Injectable()
-export class GoogleStrategy extends PassportStrategy(Strategy, 'google')
+export class GoogleStrategy
+  extends PassportStrategy(Strategy, 'google')
   implements OnModuleInit
 {
   private readonly logger = new Logger(GoogleStrategy.name);
 
   constructor(configService: ConfigService) {
     const callbackURL = resolveGoogleCallbackUrl();
-    const clientID = (configService.get<string>('GOOGLE_CLIENT_ID') ?? '').replace(
-      /\s/g,
-      '',
-    );
+    const clientID = (
+      configService.get<string>('GOOGLE_CLIENT_ID') ?? ''
+    ).replace(/\s/g, '');
     const clientSecret = (
       configService.get<string>('GOOGLE_CLIENT_SECRET') ?? ''
     ).replace(/\s/g, '');
@@ -36,17 +36,15 @@ export class GoogleStrategy extends PassportStrategy(Strategy, 'google')
     for (const warning of assertGoogleOAuthConfig()) {
       this.logger.warn(warning);
     }
-    this.logger.log(
-      `Google OAuth callback URL: ${resolveGoogleCallbackUrl()}`,
-    );
+    this.logger.log(`Google OAuth callback URL: ${resolveGoogleCallbackUrl()}`);
   }
 
-  async validate(
-    accessToken: string,
-    refreshToken: string,
+  validate(
+    _accessToken: string,
+    _refreshToken: string,
     profile: { id: string; emails?: { value: string }[]; displayName?: string },
     done: VerifyCallback,
-  ): Promise<void> {
+  ): void {
     const { id, emails, displayName } = profile;
     const email = emails?.[0]?.value;
     const name = displayName ?? email?.split('@')[0] ?? 'User';

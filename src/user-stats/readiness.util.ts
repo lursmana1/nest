@@ -1,15 +1,12 @@
 /**
  * Readiness score (მზაობის ქულა) — category-scoped, 0–100.
  *
- * Core =
- *   65% × recent exam accuracy (last 10: correct / questionCount, early fails discounted)
- * + 35% × answer accuracy      (correct / all answers in category)
+ * Score is mainly recent exams (last 20), not bank coverage:
+ *   core = 65% exam accuracy + 35% answer accuracy on those exams
+ *   score = 90% × core + 10% × (coveredTopics / topicsTotal)
  *
- * Then multiply by coverage factor so unstudied topics cannot look "ready":
- *   coverageFactor = 0.2 + 0.8 × (coveredTopics / topicsTotal)
- *   covered topic  = answered ≥70% of that topic's distinct questions
- *
- * readyForExam: last exam passed + score ≥70 + ≥70% of topics covered.
+ * Topic coverage only nudges the score and gates readyForExam (≥40% topics).
+ * readyForExam: last exam passed + score ≥90 + ≥40% of topics covered.
  */
 
 import {
@@ -20,6 +17,7 @@ import {
   MIN_SUBJECT_ATTEMPTS_FOR_STATS,
 } from '../common/constants/exam.constants.js';
 import { isSubjectCovered } from './user-stats-query.util.js';
+import { round3 } from '../common/utils/round3.util.js';
 
 export type ReadinessConfidence = 'none' | 'low' | 'medium' | 'high';
 
@@ -27,8 +25,14 @@ export const EARLY_FAIL_WINDOW = 10;
 const EARLY_FAIL_SCORE_FACTOR = 0.3;
 const EXAM_WEIGHT = 0.65;
 const ANSWER_WEIGHT = 0.35;
-/** At 0 topic coverage, keep only this fraction of the core score. */
-const COVERAGE_FLOOR = 0.2;
+/** Share of readiness score from recent exam form (rest = topic coverage). */
+const FORM_WEIGHT = 0.9;
+const COVERAGE_SCORE_WEIGHT = 0.1;
+/**
+ * Diagnostic coverage factor for API/UI (not the main score multiplier).
+ * 0 covered → COVERAGE_FLOOR; all covered → 1.
+ */
+const COVERAGE_FLOOR = 0.55;
 
 export type ReadinessAttemptInput = {
   correctCount: number;
@@ -138,6 +142,20 @@ export function computeAnswerAccuracy(
   return correct / total;
 }
 
+/** Answer accuracy from recent exam attempts only (not lifetime subject history). */
+export function computeRecentAnswerAccuracy(
+  attempts: ReadinessAttemptInput[],
+): number {
+  let correct = 0;
+  let total = 0;
+  for (const attempt of attempts) {
+    correct += attempt.correctCount;
+    total += attempt.answeredCount ?? attempt.correctCount;
+  }
+  if (total <= 0) return 0;
+  return correct / total;
+}
+
 export function countCoveredSubjects(
   subjects: ReadinessSubjectInput[],
 ): number {
@@ -184,10 +202,13 @@ export function countWeakSubjects(
   return weak;
 }
 
-/** 0 covered → COVERAGE_FLOOR; all covered → 1. */
+/**
+ * 0 covered → COVERAGE_FLOOR; all covered → 1.
+ * Uses √ so early topic progress helps more than a linear gate.
+ */
 export function computeCoverageFactor(practicePart: number): number {
   const p = Math.max(0, Math.min(1, practicePart));
-  return COVERAGE_FLOOR + (1 - COVERAGE_FLOOR) * p;
+  return COVERAGE_FLOOR + (1 - COVERAGE_FLOOR) * Math.sqrt(p);
 }
 
 export function resolveReadinessConfidence(
@@ -211,11 +232,13 @@ export function resolveReadinessLabel(
     return 'მზად ხარ გამოცდისთვის';
   }
   if (readinessScore < 50) return 'საჭიროებს მეტ სწავლას';
-  if (readinessScore < 70) return 'კარგი პროგრესი';
+  if (readinessScore < 90) return 'კარგი პროგრესი';
   return 'თითქმის მზად ხარ';
 }
 
-export function computeReadiness(input: ComputeReadinessInput): ReadinessResult {
+export function computeReadiness(
+  input: ComputeReadinessInput,
+): ReadinessResult {
   const {
     attempts,
     subjects,
@@ -231,10 +254,12 @@ export function computeReadiness(input: ComputeReadinessInput): ReadinessResult 
 
   const recentAttempts = attempts.slice(0, recentExamLimit);
   const examAccuracy = computeExamAccuracy(recentAttempts, questionCount);
-  const answerAccuracy = computeAnswerAccuracy(subjects);
+  const answerAccuracy =
+    recentAttempts.length > 0
+      ? computeRecentAnswerAccuracy(recentAttempts)
+      : computeAnswerAccuracy(subjects);
   const subjectsCovered = countCoveredSubjects(subjects);
-  const practicePart =
-    subjectsTotal > 0 ? subjectsCovered / subjectsTotal : 0;
+  const practicePart = subjectsTotal > 0 ? subjectsCovered / subjectsTotal : 0;
   const coverageFactor = computeCoverageFactor(practicePart);
   const subjectsMastered = countMasteredSubjects(
     subjects,
@@ -252,7 +277,11 @@ export function computeReadiness(input: ComputeReadinessInput): ReadinessResult 
 
   const core = EXAM_WEIGHT * examAccuracy + ANSWER_WEIGHT * answerAccuracy;
   const readinessScore = Math.round(
-    100 * Math.max(0, Math.min(1, core * coverageFactor)),
+    100 *
+      Math.max(
+        0,
+        Math.min(1, FORM_WEIGHT * core + COVERAGE_SCORE_WEIGHT * practicePart),
+      ),
   );
 
   const confidence = resolveReadinessConfidence(recentAttempts.length);
@@ -289,8 +318,4 @@ export function computeReadiness(input: ComputeReadinessInput): ReadinessResult 
     ),
     stabilityPart: 0,
   };
-}
-
-function round3(value: number): number {
-  return Math.round(value * 1000) / 1000;
 }

@@ -7,7 +7,6 @@ The app uses **PostgreSQL only** via TypeORM. MongoDB and MySQL are no longer us
 ### Required env vars
 
 ```env
-DB_TYPE=postgres
 DATABASE_URL=postgresql://USER:PASS@HOST/neondb?sslmode=require
 DB_SYNCHRONIZE=false
 JWT_SECRET=<strong random string>
@@ -28,13 +27,12 @@ AWS_PUBLIC_BASE_URL=...
 
 ### Do not set on Render
 
-- `MONGODB_URI` / `MONGODB_DB` — not used by the app anymore
-- MySQL `DB_HOST` / `DB_PORT` — not used unless `DB_TYPE=mysql` (legacy)
+- `MONGODB_URI` / `MONGODB_DB` — the Mongo/Mongoose packages are gone
+- `DB_TYPE`, MySQL `DB_HOST` / `DB_PORT` — the MySQL branch was removed; Postgres is the only driver
 
 ### Checklist after deploy
 
 - [ ] `DATABASE_URL` set (Neon production branch)
-- [ ] `DB_TYPE=postgres`
 - [ ] `DB_SYNCHRONIZE=false`
 - [ ] `JWT_SECRET` set
 - [ ] `FRONTEND_ORIGIN` includes your production frontend URL (CORS + credentials)

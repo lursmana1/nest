@@ -4,6 +4,7 @@ import { Blog } from '../blogs/entities/blog.entity';
 import { Category } from '../categories/entities/category.entity';
 import { ExamAttempt } from '../exam-attempts/entities/exam-attempt.entity';
 import { UserAnswer } from '../exam-attempts/entities/user-answer.entity';
+import { PracticeAnswer } from '../practice-answers/entities/practice-answer.entity';
 import { Exam } from '../exams/entities/exam.entity';
 import { LeaderboardPeriod } from '../leaderboard/entities/leaderboard-period.entity';
 import { Question } from '../questions/entities/question.entity';
@@ -14,6 +15,7 @@ export const TYPEORM_ENTITIES = [
   Blog,
   ExamAttempt,
   UserAnswer,
+  PracticeAnswer,
   LeaderboardPeriod,
   Question,
   Category,
@@ -47,24 +49,6 @@ function pgConnection(config: ConfigService) {
 export function buildTypeOrmOptions(
   config: ConfigService,
 ): TypeOrmModuleOptions {
-  const dbType = (config.get<string>('DB_TYPE') || 'postgres').toLowerCase();
-  const isPostgres = dbType === 'postgres' || dbType === 'postgresql';
-
-  if (!isPostgres) {
-    return {
-      type: 'mysql',
-      host: config.get<string>('DB_HOST'),
-      port: config.get<number>('DB_PORT'),
-      username: config.get<string>('DB_USERNAME'),
-      password: config.get<string>('DB_PASSWORD'),
-      database: config.get<string>('DB_DATABASE'),
-      entities: TYPEORM_ENTITIES.filter(
-        (e) => e !== Question && e !== Category && e !== Exam,
-      ),
-      synchronize: config.get('DB_SYNCHRONIZE') === 'true',
-    };
-  }
-
   return {
     ...pgConnection(config),
     entities: TYPEORM_ENTITIES,

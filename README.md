@@ -68,7 +68,6 @@ Copy `.env.example` and configure:
 
 | Variable | Description |
 |----------|-------------|
-| `DB_TYPE` | `postgres` |
 | `DATABASE_URL` | PostgreSQL connection string (recommended for Neon/Render) |
 | `DB_SYNCHRONIZE` | `false` in production |
 | `JWT_SECRET` | Secret for signing JWT tokens |
@@ -162,15 +161,28 @@ Category **names and exam rules** are defined in `src/common/constants/category.
 
 `GET /user-stats/readiness?category=1` (auth required) returns 0–100 per category:
 
-1. **Core** = 65% recent exam accuracy (last 10, early fails discounted) + 35% answer accuracy
-2. **Coverage factor** = `0.25 + 0.75 × (coveredTopics / topicsTotal)`  
-   A topic is **covered** only after answering **≥70%** of its distinct questions.
+1. **Core** = 65% recent exam accuracy (last 20, early fails discounted) + 35% answer accuracy on those same exams
+2. **Score** = **90% × core + 10% × (coveredTopics / topicsTotal)**  
+   Topic coverage only nudges the number; a long pass streak can land in the high 80s–90s even with few topics fully covered.
 
-So 0 covered topics keeps at most **20%** of the core score (your ~18% core → ~**4%** final).
-
-`readyForExam: true` when score ≥ 70, last exam passed, and ≥70% of topics covered.
+`readyForExam: true` when score ≥ **90**, last exam passed, and ≥40% of topics covered. Label becomes **მზად ხარ გამოცდისთვის**.
 
 Implemented in `src/user-stats/readiness.util.ts`.
+
+### Practice answers (ticket / trainer coverage)
+
+`POST /practice-answers` (auth) records that a user **saw** (and optionally **answered**) a live question outside a timed exam:
+
+```json
+{ "questionId": 42, "chosenAnswer": "1" }
+```
+
+Omit `chosenAnswer` (or send empty) for **seen-only** — still counts toward subject / pool coverage. Graded rows also feed weak lists and question selection.
+
+- Table: `practice_answers` (unique per user + question + lang)
+- Coverage / covered topics = **exam answers ∪ practice answers** (live bank only)
+- Readiness **examAccuracy** stays timed-exam only
+- Create table: `npm run db:ensure-practice-answers`
 
 ## Personalized question selection
 
@@ -191,19 +203,17 @@ See [docs/QUESTION-SELECTION.md](docs/QUESTION-SELECTION.md) for details.
 | `npm run build` | Production build |
 | `npm run start:prod` | Run built app |
 | `npm test` | Unit tests |
-| `npm run db:seed-categories` | Seed/update categories from questions |
+| `npm run db:ensure-user-stats-indexes` | Indexes for user-stats queries |
+| `npm run db:ensure-practice-answers` | Create `practice_answers` table |
 | `npm run db:verify-questions` | Verify question import |
 | `npm run db:fix-am-category-tags` | Sync `categories` array from ka → en/ru |
 | `npm run import:questions` | Import from CSV (`--ka`, `--ru`, `--en`) |
-
-Migration scripts (`db:migrate-*`) are for one-time data moves from legacy MySQL/MongoDB.
 
 ## Deployment
 
 Production setup: **Render** (API) + **Neon** (PostgreSQL).
 
 ```env
-DB_TYPE=postgres
 DATABASE_URL=postgresql://...@...neon.tech/neondb?sslmode=require
 DB_SYNCHRONIZE=false
 ```

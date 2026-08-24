@@ -42,7 +42,11 @@ export class QuestionsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Query('lang') langQuery?: string, @Headers('accept-language') langHeader?: string) {
+  findOne(
+    @Param('id') id: string,
+    @Query('lang') langQuery?: string,
+    @Headers('accept-language') langHeader?: string,
+  ) {
     return this.questionsService.findOne(id, parseLang(langQuery, langHeader));
   }
 }

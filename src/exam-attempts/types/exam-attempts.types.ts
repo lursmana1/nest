@@ -1,3 +1,6 @@
+import type { Question } from '../../questions/entities/question.entity';
+import type { UserAnswer } from '../entities/user-answer.entity';
+
 export interface StartAttemptOptions {
   lang: string;
   count?: number;
@@ -44,4 +47,20 @@ export interface RawAnswerRow {
   correct: boolean;
   chosenAnswer: string;
   createdAt: Date;
+}
+
+/** GET /exam-attempts/:id payload (questions + answers). */
+export interface AttemptDetail {
+  id: number;
+  questionIds: number[];
+  questions: Question[];
+  answers: UserAnswer[];
+  createdAt: Date;
+  endDate: Date | null;
+  completedAt: Date | null;
+  passed: boolean | null;
+  durationSeconds: number | null;
+  minCorrectToPass: number | null;
+  categories: number[];
+  subjects: number[];
 }

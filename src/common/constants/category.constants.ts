@@ -18,9 +18,7 @@ export const CATEGORY_DISPLAY_META: CategoryDisplayMeta[] = [
   { id: 9, name: 'T/S', iconKey: 'ts' },
 ];
 
-const CATEGORY_BY_ID = new Map(
-  CATEGORY_DISPLAY_META.map((c) => [c.id, c]),
-);
+const CATEGORY_BY_ID = new Map(CATEGORY_DISPLAY_META.map((c) => [c.id, c]));
 
 export function getCategoryDisplayMeta(
   categoryId: number,

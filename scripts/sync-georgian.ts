@@ -23,18 +23,17 @@ function envMs(key: string, fallback: number): number {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-/** Pause after a successful gen (paid-tier defaults; raise for free tier) */
-const REQUEST_DELAY_MS = envMs('GEORGIAN_REQUEST_DELAY_MS', 7_000);
+/** Pause after each Gemini call (success or give-up). Keep ≥5s or 429s stack up. */
+const REQUEST_DELAY_MS = envMs('GEORGIAN_REQUEST_DELAY_MS', 5_000);
 /** First 429 wait; then exponential backoff */
 const RATE_LIMIT_BASE_MS = envMs('GEORGIAN_429_BASE_MS', 30_000);
 const RATE_LIMIT_MAX_MS = envMs('GEORGIAN_429_MAX_MS', 300_000);
 /** Stop after this many consecutive 429s on the *current* model (0 = disabled) */
 const MAX_429_STREAK = envMs('GEORGIAN_MAX_429_STREAK', 20);
 /**
- * After this many consecutive Flash 429s, switch to Pro (daily RPD ≈100 signal).
- * Override: GEORGIAN_SWITCH_AFTER_429=0 to disable fallback.
+ * Stay on Flash unless you opt in: GEORGIAN_SWITCH_AFTER_429=3
  */
-const SWITCH_AFTER_429 = envMs('GEORGIAN_SWITCH_AFTER_429', 3);
+const SWITCH_AFTER_429 = envMs('GEORGIAN_SWITCH_AFTER_429', 0);
 const DEFAULT_BUCKET = 'prava-ge-assets';
 const MIN_S3_BYTES = 1000;
 const MIN_DECODED_AUDIO_BYTES = 800;
@@ -565,8 +564,8 @@ async function main() {
           attempt--;
         } else {
           console.error(`[${doc.id}]`, err);
+          await sleep(REQUEST_DELAY_MS);
           if (attempt >= MAX_AUDIO_GENERATION_ATTEMPTS) done = true;
-          else await sleep(5000);
         }
       }
     }
