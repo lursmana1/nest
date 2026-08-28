@@ -50,6 +50,7 @@ docs/seo/
 
 # Local DB dumps and script checkpoints (do not commit)
 /backups/
+scripts/questions.json
 .recovery-question-checkpoint.json
 .translate-correct-checkpoint.json
 problematic-question-ids.csv

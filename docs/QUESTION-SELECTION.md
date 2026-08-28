@@ -40,16 +40,18 @@ Ratios depend on how much answer history the user has. New users get 100% random
 ```
 src/exam-attempts/question-selection/
 ├── selection.types.ts           # Types, ratios, constants
-├── weakness.service.ts          # Postgres: answer history → mistake/success IDs
-├── question-sampling.service.ts # MongoDB: random + weighted sampling
+├── weakness.service.ts          # Answer history → mistake/success IDs
+├── question-sampling.service.ts # Random + weighted sampling
 └── question-selection.service.ts # Orchestrator: level → sampling → shuffle
 ```
+
+Everything here runs on PostgreSQL through the TypeORM query builder.
 
 | File | Responsibility |
 |------|----------------|
 | `selection.types.ts` | `SelectionOptions`, `WeaknessIds`, `SelectionRatios`, `FULL_RATIOS`, `LIGHT_RATIOS` |
-| `weakness.service.ts` | `getTotalAnswerCount()`, `getWeaknessIds()` — PostgreSQL only |
-| `question-sampling.service.ts` | `buildMatchFilter()`, `sampleRandom()`, `sampleWeighted()` — MongoDB only |
+| `weakness.service.ts` | `getTotalAnswerCount()`, `getWeaknessIds()` |
+| `question-sampling.service.ts` | `buildMatchFilter()`, `countMatching()`, `sampleRandom()`, `sampleWeighted()` |
 | `question-selection.service.ts` | `selectQuestions()` — orchestrates level check, sampling, shuffle |
 
 ---
@@ -93,7 +95,7 @@ src/exam-attempts/question-selection/
 
 **Same question multiple times:** All answers for that question are summed. A question can appear in many attempts (correct and wrong); the net sum decides whether it is a mistake or success.
 
-**Output:** `WeaknessIds` with `mistakeIds`, `successIds`, `mistakeSubjects`, `successSubjects`. Each array is capped at `MAX_WEAKNESS_IDS_CAP` to keep MongoDB `$in`/`$nin` fast.
+**Output:** `WeaknessIds` with `mistakeIds`, `successIds`, `mistakeSubjects`, `successSubjects`. Each array is capped at `MAX_WEAKNESS_IDS_CAP` to keep the `IN (...)` / `NOT IN (...)` lists short.
 
 ---
 
@@ -121,7 +123,7 @@ Questions from the full pool matching the base filter, excluding IDs already cho
 
 ### Order of selection
 
-1. Sample mistakes and success in parallel (`$facet`)
+1. Sample mistakes and success in parallel (two queries via `Promise.all`)
 2. Sample random excluding selected
 3. Combine: `[mistakes, success, random]`
 4. Shuffle final list
@@ -131,13 +133,13 @@ Questions from the full pool matching the base filter, excluding IDs already cho
 ## Data Flow
 
 ```
-1. Postgres: count total answers → choose level
-2. If level 0: MongoDB random aggregation → shuffle → return
+1. Count total answers → choose level
+2. If level 0: one random sample → shuffle → return
 3. If level 1 or 2:
-   a. Postgres: fetch weakness (last 500 answers) → compute mistake/success IDs (capped at 100 each)
-   b. MongoDB: aggregation 1 — $facet (mistakes + success in parallel)
-   c. MongoDB: aggregation 2 — random (excluding selected)
-   d. If fewer than count: fallback random aggregation
+   a. Fetch weakness (last 500 answers) → compute mistake/success IDs (capped at 100 each)
+   b. Sample mistakes and success in parallel (two queries)
+   c. Sample random, excluding what was already selected
+   d. If fewer than count: fallback random sample
    e. Shuffle final list → return
 ```
 
@@ -145,18 +147,21 @@ Questions from the full pool matching the base filter, excluding IDs already cho
 
 ## Performance
 
-| Scenario | Postgres | MongoDB |
-|----------|----------|---------|
-| &lt; 100 answers | 1 count | 1 aggregation |
-| ≥ 100 answers | 1 count + 1 weakness query | 2 aggregations |
-| Fallback (pool too small) | — | +1 aggregation |
+Every step is a Postgres round trip, so the query count is what matters:
+
+| Scenario | Queries |
+|----------|---------|
+| &lt; 100 answers | 1 count + 1 random sample |
+| ≥ 100 answers | 1 count + 1 weakness query + 2 parallel samples + 1 random sample |
+| Fallback (pool too small) | +1 random sample |
 
 **Optimizations:**
-- `MAX_HISTORY_FOR_WEIGHTING = 500` — fewer rows from Postgres
-- `MAX_WEAKNESS_IDS_CAP = 100` — keeps `$in`/`$nin` arrays small
-- Two simple aggregations instead of one with `$lookup` — avoids expensive self-join
-- Index `{ lang: 1, id: 1 }` on questions for fast id lookups
-- Index `{ lang: 1, categories: 1, subject: 1 }` for base match
+- `MAX_HISTORY_FOR_WEIGHTING = 500` — bounds the weakness query
+- `MAX_WEAKNESS_IDS_CAP = 100` — keeps the `IN (...)` lists short
+- Mistake and success samples run concurrently, so they cost one round trip, not two
+- Each sample selects only `q.id`, never whole question rows
+- `idx_questions_categories_gin` — GIN index for the `categories && ARRAY[...]` overlap test
+- `idx_user_answers_attempt_created` — backs the weakness history query
 
 ---
 
@@ -173,10 +178,10 @@ Questions from the full pool matching the base filter, excluding IDs already cho
 | `categories` | number[] | Optional. Restrict to these categories. |
 | `allSubjects` | boolean | Optional. If true, `subjects` is ignored. |
 
-**Match filter (MongoDB):**
-- `lang` — always applied
-- `categories: { $in: categories }` — if `categories` provided
-- `subject: { $in: subjects }` — if `subjects` provided and not `allSubjects`
+**Match filter** (`applyQuestionFilters` in `src/questions/question-query.util.ts`):
+- `q.lang = :lang` — always applied
+- `q.categories && ARRAY[:...categories]::int[]` — array overlap, if `categories` provided
+- `q.subject IN (:...subjects)` — if `subjects` provided and not `allSubjects`
 
 ---
 
@@ -221,15 +226,19 @@ Returns `{ mistakeIds, successIds, mistakeSubjects, successSubjects }` from answ
 
 ### QuestionSamplingService
 
-**`buildMatchFilter(lang, subjects?, categories?, allSubjects?): MatchFilter`**
+**`buildMatchFilter(lang, subjects?, categories?, allSubjects?): QuestionFilterOpts`**
 
-Builds the MongoDB match filter for the base pool.
+Builds the filter options for the base pool.
 
-**`sampleRandom(match, limit, exclude?): Promise<number[]>`**
+**`countMatching(filter): Promise<number>`**
 
-Samples random question IDs. Uses `$group` + `$rand` for consistent counts.
+Counts questions matching the filter. Used to detect a pool smaller than the requested count.
 
-**`sampleWeighted(match, count, weakness, ratios): Promise<number[]>`**
+**`sampleRandom(filter, limit, exclude?): Promise<number[]>`**
+
+Samples random question IDs via `ORDER BY RANDOM() LIMIT n`.
+
+**`sampleWeighted(filter, count, weakness, ratios): Promise<number[]>`**
 
 Samples mistakes + success + random according to ratios.
 
@@ -240,9 +249,9 @@ Samples mistakes + success + random according to ratios.
 | Case | Behavior |
 |------|----------|
 | No mistake/success candidates | Those buckets return 0; random fills the rest. |
-| Pool smaller than count | Fallback random aggregation adds more (broader match if needed). |
-| Empty `mistakeIds` and `mistakeSubjects` | Mistake match returns 0 docs. |
-| Empty `successIds` and `successSubjects` | Success match returns 0 docs. |
+| Pool smaller than count | Fallback random sample adds more (broader match if needed). |
+| Empty `mistakeIds` and `mistakeSubjects` | Mistake query is skipped entirely, returning 0 rows. |
+| Empty `successIds` and `successSubjects` | Success query is skipped entirely, returning 0 rows. |
 | Question in both mistake subject and success by id | Treated as mistake (question-level wins). |
 | All answers tied (sum = 0) | No mistake/success IDs; selection is effectively random. |
 
@@ -254,4 +263,3 @@ Samples mistakes + success + random according to ratios.
 - Adjust ratios per level
 - Add difficulty/adaptive logic when enough data exists
 - Cache weakness per user for a short TTL
-- Add indexes on `user_answers(attemptId, createdAt)` for faster weakness query

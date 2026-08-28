@@ -8,6 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { CookieOptions, Request, Response } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -29,20 +30,6 @@ function getCookieOptions(): CookieOptions {
     path: '/',
     maxAge: 7 * 24 * 60 * 60 * 1000,
   };
-}
-
-function appendAccessTokenToRedirect(
-  baseUrl: string,
-  accessToken: string,
-): string {
-  try {
-    const url = new URL(baseUrl);
-    url.searchParams.set('access_token', accessToken);
-    return url.toString();
-  } catch {
-    const sep = baseUrl.includes('?') ? '&' : '?';
-    return `${baseUrl}${sep}access_token=${encodeURIComponent(accessToken)}`;
-  }
 }
 
 @Controller('auth')
@@ -78,15 +65,14 @@ export class AuthController {
       req.user.name,
     );
 
+    // Token travels only in the httpOnly cookie — never the URL, which would
+    // leak it into browser history, Referer headers and proxy logs.
     res.cookie('access_token', result.access_token, getCookieOptions());
-
-    const redirectBase = process.env.GOOGLE_REDIRECT_AFTER_LOGIN || '/';
-    res.redirect(
-      appendAccessTokenToRedirect(redirectBase, result.access_token),
-    );
+    res.redirect(process.env.GOOGLE_REDIRECT_AFTER_LOGIN || '/');
   }
 
   @Post('register')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   async register(
     @Body() dto: RegisterDto,
     @Res({ passthrough: true }) res: Response,
@@ -104,6 +90,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   async login(
     @Body() dto: LoginDto,
     @Res({ passthrough: true }) res: Response,

@@ -15,8 +15,14 @@ import {
 } from '../common/utils/georgian-exam-rules.util.js';
 import { round3 } from '../common/utils/round3.util.js';
 import { computeReadiness } from './readiness.util.js';
+import {
+  toReadinessResponse,
+  toWeakSubjectItems,
+} from './user-stats.mapper.js';
 import { buildSubjectProgressRows } from './user-stats-query.util.js';
-import { UserStatsQueryService } from './user-stats-query.service';
+import { WeakStatsQueryService } from './queries/weak-stats.query.service';
+import { AttemptStatsQueryService } from './queries/attempt-stats.query.service';
+import { CoverageStatsQueryService } from './queries/coverage-stats.query.service';
 import type {
   CategoryProgress,
   QuestionPoolResponse,
@@ -40,23 +46,29 @@ export type {
 } from './user-stats.types.js';
 
 /**
- * Builds the /user-stats API responses. All SQL lives in `UserStatsQueryService`;
- * this service composes rows into the payloads the profile screens consume.
+ * Builds the /user-stats API responses. All SQL lives in the `queries/`
+ * services; this one composes rows into the payloads the profile screens read.
  */
 @Injectable()
 export class UserStatsService {
-  constructor(private readonly query: UserStatsQueryService) {}
+  constructor(
+    private readonly weak: WeakStatsQueryService,
+    private readonly attempts: AttemptStatsQueryService,
+    private readonly coverage: CoverageStatsQueryService,
+  ) {}
 
   async getSummary(
     userId: number,
     categoryId: number,
     lang: string = DEFAULT_LANG,
   ): Promise<UserStatsSummary> {
-    const progress = await this.loadCategoryProgress(userId, categoryId, lang);
-    const [readiness, pool] = await Promise.all([
-      this.buildReadiness(userId, categoryId, progress),
-      this.query.loadQuestionPoolExposure(userId, categoryId, lang),
+    // Pool exposure is independent of progress; only readiness needs it, so
+    // run the two heavy history scans together instead of back to back.
+    const [progress, pool] = await Promise.all([
+      this.loadCategoryProgress(userId, categoryId, lang),
+      this.coverage.loadQuestionPoolExposure(userId, categoryId, lang),
     ]);
+    const readiness = await this.buildReadiness(userId, categoryId, progress);
 
     return {
       categoryId,
@@ -83,7 +95,7 @@ export class UserStatsService {
     categoryId: number,
     lang: string = DEFAULT_LANG,
   ): Promise<QuestionPoolResponse> {
-    const pool = await this.query.loadQuestionPoolExposure(
+    const pool = await this.coverage.loadQuestionPoolExposure(
       userId,
       categoryId,
       lang,
@@ -114,11 +126,11 @@ export class UserStatsService {
     lang: string = DEFAULT_LANG,
     categoryId?: number,
   ): Promise<WeakQuestionsResponse> {
-    const { rows, total } = await this.query.loadWeakQuestionCounts(
+    const { rows, total } = await this.weak.loadWeakQuestionCounts(
       userId,
       categoryId,
     );
-    const previews = await this.query.loadQuestionPreviews(
+    const previews = await this.weak.loadQuestionPreviews(
       rows.map((r) => r.questionId),
       lang,
     );
@@ -141,9 +153,9 @@ export class UserStatsService {
     categoryId?: number,
   ): Promise<WeakSubjectsResponse> {
     const [top, catalog] = await Promise.all([
-      this.query.loadWeakSubjectTop(userId, categoryId ?? null),
+      this.weak.loadWeakSubjectTop(userId, categoryId ?? null),
       categoryId != null
-        ? this.query.loadCategorySubjectCatalog(categoryId, lang)
+        ? this.coverage.loadCategorySubjectCatalog(categoryId, lang)
         : Promise.resolve([] as CategorySubjectRow[]),
     ]);
 
@@ -151,30 +163,18 @@ export class UserStatsService {
       return { categoryId: categoryId ?? null, data: [], total: top.total };
     }
 
-    const nameMap = new Map(catalog.map((s) => [s.id, s.name]));
-    const totalMap = new Map(catalog.map((s) => [s.id, s.questionsCount]));
-
-    let fallbackTotals = new Map<number, number>();
-    if (catalog.length === 0) {
-      fallbackTotals = await this.query.loadQuestionTotalsBySubject(
-        top.rows.map((x) => x.subjectId),
-        lang,
-        categoryId,
-      );
-    }
+    const fallbackTotals =
+      catalog.length === 0
+        ? await this.weak.loadQuestionTotalsBySubject(
+            top.rows.map((row) => row.subjectId),
+            lang,
+            categoryId,
+          )
+        : new Map<number, number>();
 
     return {
       categoryId: categoryId ?? null,
-      data: top.rows.map((row) => ({
-        subjectId: row.subjectId,
-        name: nameMap.get(row.subjectId) ?? `Subject ${row.subjectId}`,
-        wrongCount: row.wrongCount,
-        correctCount: row.correctCount,
-        attempted: row.attempted,
-        correctnessRate: round3(row.correctnessRate),
-        totalQuestions:
-          totalMap.get(row.subjectId) ?? fallbackTotals.get(row.subjectId) ?? 0,
-      })),
+      data: toWeakSubjectItems(top.rows, catalog, fallbackTotals),
       total: top.total,
     };
   }
@@ -204,8 +204,8 @@ export class UserStatsService {
   ): Promise<ReadinessResponse> {
     const { display, rule, passRate, progressRows } = progress;
     const [attemptRows, completedAttemptsTotal] = await Promise.all([
-      this.query.loadRecentCompletedAttempts(userId, categoryId),
-      this.query.countCompletedAttemptsForCategory(userId, categoryId),
+      this.attempts.loadRecentCompletedAttempts(userId, categoryId),
+      this.attempts.countCompletedAttemptsForCategory(userId, categoryId),
     ]);
 
     const readiness = computeReadiness({
@@ -233,31 +233,11 @@ export class UserStatsService {
       readyPracticeThreshold: READINESS_READY_PRACTICE_THRESHOLD,
     });
 
-    const rules = formatExamRuleResponse(categoryId, rule);
-    return {
-      categoryName: display.name,
-      categoryId: rules.categoryId,
-      questionCount: rules.questionCount,
-      minCorrectToPass: rules.minCorrectToPass,
-      maxWrongAnswers: rules.maxWrongAnswers,
-      durationMinutes: rules.durationMinutes,
-      readinessScore: readiness.readinessScore,
-      confidence: readiness.confidence,
-      readyForExam: readiness.readyForExam,
-      label: readiness.label,
-      examAccuracy: readiness.examAccuracy,
-      answerAccuracy: readiness.answerAccuracy,
-      practicePart: readiness.practicePart,
-      coverageFactor: readiness.coverageFactor,
-      earlyFailCount: readiness.earlyFailCount,
-      lastAttemptPassed: readiness.lastAttemptPassed,
-      completedAttemptsTotal: readiness.completedAttemptsTotal,
-      completedAttemptsUsed: readiness.completedAttemptsUsed,
-      subjectsCovered: readiness.subjectsCovered,
-      subjectsMastered: readiness.subjectsMastered,
-      subjectsTotal: readiness.subjectsTotal,
-      weakSubjectsCount: readiness.weakSubjectsCount,
-    };
+    return toReadinessResponse(
+      display.name,
+      formatExamRuleResponse(categoryId, rule),
+      readiness,
+    );
   }
 
   private async loadCategoryProgress(
@@ -274,8 +254,8 @@ export class UserStatsService {
     const passRate = rule.minCorrectToPass / rule.questionCount;
 
     const [catalog, subjectStats] = await Promise.all([
-      this.query.loadCategorySubjectCatalog(categoryId, lang),
-      this.query.loadSubjectAggregatesForCategory(userId, categoryId),
+      this.coverage.loadCategorySubjectCatalog(categoryId, lang),
+      this.coverage.loadSubjectAggregatesForCategory(userId, categoryId),
     ]);
 
     const countsBySubject = new Map<

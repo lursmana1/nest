@@ -50,6 +50,19 @@ async function main() {
        ON user_answers ("questionId")`,
     `CREATE INDEX IF NOT EXISTS idx_questions_categories_gin
        ON questions USING gin (categories)`,
+    // Weakness + leaderboard read recent answers per attempt in time order.
+    `CREATE INDEX IF NOT EXISTS idx_user_answers_attempt_created
+       ON user_answers ("attemptId", "createdAt" DESC)`,
+    // Practice coverage scans a user's rows newest-first.
+    `CREATE INDEX IF NOT EXISTS idx_practice_answers_user_updated
+       ON practice_answers ("userId", "updatedAt" DESC)`,
+    // Readiness/summary only ever count settled attempts.
+    `CREATE INDEX IF NOT EXISTS idx_exam_attempts_user_completed_only
+       ON exam_attempts ("userId", "completedAt" DESC)
+       WHERE "completedAt" IS NOT NULL`,
+    // getCurrentPeriod filters the active window on every leaderboard call.
+    `CREATE INDEX IF NOT EXISTS idx_leaderboard_periods_window
+       ON leaderboard_periods ("startDate", "endDate")`,
   ];
 
   for (const sql of statements) {

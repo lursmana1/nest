@@ -13,6 +13,10 @@ import { LeaderboardService } from './leaderboard.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { CreatePeriodDto } from './dto/create-period.dto.js';
+import { resolvePageParams } from '../common/utils/pagination.util.js';
+
+const DEFAULT_LEADERBOARD_PAGE_SIZE = 10;
+const MAX_LEADERBOARD_PAGE_SIZE = 100;
 
 @Controller('leaderboard')
 export class LeaderboardController {
@@ -23,6 +27,7 @@ export class LeaderboardController {
     @Req() req: { user?: { userId: number } },
     @Query('page', new ParseIntPipe({ optional: true })) page?: number,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('size', new ParseIntPipe({ optional: true })) size?: number,
   ) {
     const current = await this.leaderboardService.getCurrentPeriod();
     if (!current) {
@@ -31,13 +36,18 @@ export class LeaderboardController {
       );
     }
 
-    const safePage = page != null ? Math.max(1, page) : 1;
-    const safeLimit = limit != null ? Math.min(Math.max(1, limit), 100) : 10;
+    const { page: pageNum, size: pageSize } = resolvePageParams(
+      { page, size, limit },
+      {
+        defaultSize: DEFAULT_LEADERBOARD_PAGE_SIZE,
+        maxSize: MAX_LEADERBOARD_PAGE_SIZE,
+      },
+    );
     return this.leaderboardService.getLeaderboard(
       req.user?.userId ?? null,
       current.id,
-      safePage,
-      safeLimit,
+      pageNum,
+      pageSize,
     );
   }
 

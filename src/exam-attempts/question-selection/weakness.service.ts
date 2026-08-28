@@ -8,6 +8,7 @@ import {
   MAX_WEAKNESS_IDS_CAP,
   MIN_SUBJECT_ATTEMPTS_FOR_STATS,
 } from '../../common/constants/exam.constants.js';
+import { parsePgBoolean } from '../../common/utils/pg-row.util.js';
 import type { WeaknessIds } from './selection.types.js';
 
 /**
@@ -103,8 +104,7 @@ export class WeaknessService {
       .map((r) => ({
         a_questionId: Number(r.a_questionId),
         a_subject: Number(r.a_subject),
-        a_correct:
-          r.a_correct === true || r.a_correct === 't' || r.a_correct === 'true',
+        a_correct: parsePgBoolean(r.a_correct),
         a_createdAt: r.a_createdAt,
       }))
       .sort(

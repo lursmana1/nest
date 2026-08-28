@@ -1,8 +1,10 @@
+import { EXAM_DURATION_MINUTES } from '../constants/exam.constants.js';
+
 /**
  * Official Georgian driving theory exam rules (sa.gov.ge, 2026).
  * Category IDs match the app's categories table and frontend URL `?category=`.
  *
- * Note: IDs 1 and 2 are B then A (not A then B) — same order as prava.ge / MongoDB.
+ * Note: IDs 1 and 2 are B then A (not A then B) — same order as prava.ge.
  */
 export type GeorgianExamRule = {
   questionCount: number;
@@ -56,7 +58,7 @@ export function formatExamRuleResponse(
     questionCount: rule.questionCount,
     minCorrectToPass: rule.minCorrectToPass,
     maxWrongAnswers: rule.questionCount - rule.minCorrectToPass,
-    durationMinutes: 30,
+    durationMinutes: EXAM_DURATION_MINUTES,
   };
 }
 

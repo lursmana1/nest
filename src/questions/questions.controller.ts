@@ -15,13 +15,14 @@ export class QuestionsController {
     @Query('subjects') subjects?: string,
     @Query('page') page?: string,
     @Query('size') size?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.questionsService.findPaged({
       lang: parseLang(langQuery, langHeader),
       category: category ? Number(category) : undefined,
       subjects: parseIdList(subjects),
       page: Math.max(Number(page ?? 1), 1),
-      size: clampSize(size),
+      size: clampSize(size ?? limit),
     });
   }
 
@@ -51,6 +52,7 @@ export class QuestionsController {
   }
 }
 
+/** The question bank offers three fixed page sizes; anything else snaps to 20. */
 function clampSize(size?: string): 10 | 20 | 40 {
   const n = Number(size ?? 20);
   if (n === 10 || n === 20 || n === 40) return n;

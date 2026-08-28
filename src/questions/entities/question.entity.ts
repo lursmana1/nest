@@ -2,7 +2,6 @@ import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 
 /**
  * One row per (id, lang). Same logical question id appears up to 3 times (ka, ru, en).
- * Migrated from MongoDB `questions` collection.
  */
 @Entity('questions')
 @Index(['lang', 'id'])

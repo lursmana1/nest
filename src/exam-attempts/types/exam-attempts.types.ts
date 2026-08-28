@@ -1,4 +1,5 @@
 import type { Question } from '../../questions/entities/question.entity';
+import type { ExamQuestion } from '../exam-question.view';
 import type { UserAnswer } from '../entities/user-answer.entity';
 
 export interface StartAttemptOptions {
@@ -53,7 +54,8 @@ export interface RawAnswerRow {
 export interface AttemptDetail {
   id: number;
   questionIds: number[];
-  questions: Question[];
+  /** Answer key present only once `completedAt` is set. */
+  questions: Question[] | ExamQuestion[];
   answers: UserAnswer[];
   createdAt: Date;
   endDate: Date | null;

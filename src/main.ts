@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
 
 function parseOrigins(value?: string) {
   // FRONTEND_ORIGIN can be:
@@ -20,6 +21,11 @@ async function bootstrap() {
   // Required behind Render/nginx so secure cookies and OAuth redirects work.
   app.set('trust proxy', 1);
 
+  // API serves JSON only; CSP/COEP defaults would only restrict a UI we don't ship.
+  app.use(
+    helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }),
+  );
+
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
@@ -28,17 +34,22 @@ async function bootstrap() {
     }),
   );
 
+  const isProduction = process.env.NODE_ENV === 'production';
   const allowedOrigins = parseOrigins(process.env.FRONTEND_ORIGIN);
+  const devOrigins = isProduction
+    ? []
+    : ['http://localhost:3000', 'http://localhost:3001'];
+
+  if (isProduction && allowedOrigins.length === 0) {
+    throw new Error('FRONTEND_ORIGIN must be set in production');
+  }
 
   app.enableCors({
     origin: (origin, callback) => {
       // allow server-to-server / Postman / curl (no Origin header)
       if (!origin) return callback(null, true);
 
-      // allow localhost by default for dev
-      const defaults = ['http://localhost:3000', 'http://localhost:3001'];
-
-      if (allowedOrigins.includes(origin) || defaults.includes(origin)) {
+      if (allowedOrigins.includes(origin) || devOrigins.includes(origin)) {
         return callback(null, true);
       }
       return callback(new Error(`CORS blocked for origin: ${origin}`), false);

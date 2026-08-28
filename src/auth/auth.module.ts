@@ -8,7 +8,6 @@ import { AuthService } from './auth.service';
 import { User } from '../users/entities/user.entity';
 import { JwtStrategy } from './jwt.strategy';
 import { GoogleStrategy } from './google.strategy';
-import { RolesGuard } from './roles.guard';
 import { AdminGuard } from './admin.guard';
 
 @Module({
@@ -19,13 +18,13 @@ import { AdminGuard } from './admin.guard';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         secret: configService.get<string>('JWT_SECRET'),
-        signOptions: { expiresIn: '7d' },
+        signOptions: { expiresIn: '7d', algorithm: 'HS256' },
       }),
       inject: [ConfigService],
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, GoogleStrategy, RolesGuard, AdminGuard],
-  exports: [RolesGuard, AdminGuard],
+  providers: [AuthService, JwtStrategy, GoogleStrategy, AdminGuard],
+  exports: [AdminGuard],
 })
 export class AuthModule {}

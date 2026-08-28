@@ -1,6 +1,6 @@
 import type { CategoryDisplayMeta } from '../common/constants/category.constants.js';
 import type { ResolvedGeorgianExamRule } from '../common/utils/georgian-exam-rules.util.js';
-import type { ReadinessResult } from './readiness.util.js';
+import type { ReadinessResult } from './readiness.types.js';
 import type { SubjectProgressRow } from './user-stats-query.util.js';
 
 /** Category metadata + exam rule + per-topic rows, shared by readiness and progress. */

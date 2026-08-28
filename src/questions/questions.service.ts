@@ -4,6 +4,24 @@ import { Repository } from 'typeorm';
 import { Question } from './entities/question.entity';
 import { applyQuestionFilters, stripLangField } from './question-query.util';
 
+type QuestionListRow = Omit<Question, 'lang'>;
+
+/**
+ * `data`/`pageSize` match the other list endpoints. `items`/`size` are the
+ * original keys, kept until the frontend migrates.
+ */
+export type PagedQuestions = {
+  data: QuestionListRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  /** @deprecated alias for `data` */
+  items: QuestionListRow[];
+  /** @deprecated alias for `pageSize` */
+  size: number;
+};
+
 @Injectable()
 export class QuestionsService {
   constructor(
@@ -17,9 +35,8 @@ export class QuestionsService {
     subjects?: number[];
     page: number;
     size: 10 | 20 | 40;
-  }) {
+  }): Promise<PagedQuestions> {
     const { lang, category, subjects, page, size } = opts;
-    const skip = (page - 1) * size;
 
     const baseQb = this.questionRepo.createQueryBuilder('q');
     applyQuestionFilters(baseQb, 'q', { lang, category, subjects });
@@ -28,16 +45,20 @@ export class QuestionsService {
     const rows = await baseQb
       .clone()
       .orderBy('q.id', 'ASC')
-      .skip(skip)
+      .skip((page - 1) * size)
       .take(size)
       .getMany();
 
+    const data = rows.map(stripLangField);
+
     return {
-      items: rows.map(stripLangField),
+      data,
       page,
-      size,
+      pageSize: size,
       total,
       totalPages: Math.ceil(total / size),
+      items: data,
+      size,
     };
   }
 
@@ -65,14 +86,5 @@ export class QuestionsService {
       return null;
     }
     return this.questionRepo.findOne({ where: { id: numId, lang } });
-  }
-
-  async findByIds(ids: number[], lang: string): Promise<Question[]> {
-    if (!ids.length) return [];
-    return this.questionRepo
-      .createQueryBuilder('q')
-      .where('q.lang = :lang', { lang })
-      .andWhere('q.id IN (:...ids)', { ids })
-      .getMany();
   }
 }

@@ -10,6 +10,11 @@ import {
   DEFAULT_HISTORY_PAGE_SIZE,
 } from '../common/constants/exam.constants.js';
 import { resolveDisplayDuration } from './attempt-duration.util.js';
+import { parsePgBoolean } from '../common/utils/pg-row.util.js';
+import {
+  EXAM_QUESTION_COLUMNS,
+  type ExamQuestion,
+} from './exam-question.view.js';
 import type {
   AttemptSummary,
   AttemptHistoryCounts,
@@ -71,10 +76,10 @@ export class AttemptQueryService {
 
   async getAttempt(userId: number, attemptId: number): Promise<AttemptDetail> {
     const attempt = await this.findAttemptForUser(attemptId, userId);
-    const questions = await this.findQuestionsByIds(
-      attempt.questionIds,
-      attempt.lang,
-    );
+    // Answers stay hidden until the attempt is settled, then power the review.
+    const questions = attempt.completedAt
+      ? await this.findQuestionsByIds(attempt.questionIds, attempt.lang)
+      : await this.findExamQuestionsByIds(attempt.questionIds, attempt.lang);
 
     return {
       id: attempt.id,
@@ -106,7 +111,7 @@ export class AttemptQueryService {
       .addSelect('a.createdAt', 'createdAt')
       .where('t.userId = :userId', { userId })
       .orderBy('a.createdAt', 'DESC')
-      .take(limit)
+      .limit(limit)
       .getRawMany<{
         questionId: string;
         subject: string | null;
@@ -118,7 +123,7 @@ export class AttemptQueryService {
     return rows.map((a) => ({
       questionId: Number(a.questionId),
       subject: a.subject == null ? null : Number(a.subject),
-      correct: a.correct === true || a.correct === 't' || a.correct === 'true',
+      correct: parsePgBoolean(a.correct),
       chosenAnswer: a.chosenAnswer,
       createdAt: new Date(a.createdAt),
     }));
@@ -128,10 +133,16 @@ export class AttemptQueryService {
     attemptId: number,
     userId: number,
   ): Promise<ExamAttempt> {
-    const attempt = await this.attemptRepo.findOne({
-      where: { id: attemptId, userId },
-      relations: ['answers'],
-    });
+    // One left join on purpose: `findOne` + `relations` issues a SELECT
+    // DISTINCT pre-query first, doubling the round trips on every answer.
+    const attempt = await this.attemptRepo
+      .createQueryBuilder('e')
+      .leftJoinAndSelect('e.answers', 'a')
+      .where('e.id = :attemptId', { attemptId })
+      .andWhere('e.userId = :userId', { userId })
+      .orderBy('a.id', 'ASC')
+      .getOne();
+
     if (!attempt) {
       throw new NotFoundException('Attempt not found');
     }
@@ -140,16 +151,36 @@ export class AttemptQueryService {
 
   /** Preserve ticket order from `questionIds` (IN-query order is undefined). */
   async findQuestionsByIds(ids: number[], lang: string): Promise<Question[]> {
+    return this.loadQuestions(ids, lang);
+  }
+
+  /** Live-exam variant: answer-key columns are never read from the database. */
+  async findExamQuestionsByIds(
+    ids: number[],
+    lang: string,
+  ): Promise<ExamQuestion[]> {
+    return this.loadQuestions(
+      ids,
+      lang,
+      EXAM_QUESTION_COLUMNS.map((c) => `q.${c}`),
+    );
+  }
+
+  private async loadQuestions<T extends { id: number }>(
+    ids: number[],
+    lang: string,
+    select?: string[],
+  ): Promise<T[]> {
     if (!ids.length) return [];
-    const rows = await this.questionRepo
+    const qb = this.questionRepo
       .createQueryBuilder('q')
       .where('q.lang = :lang', { lang })
-      .andWhere('q.id IN (:...ids)', { ids })
-      .getMany();
+      .andWhere('q.id IN (:...ids)', { ids });
+    if (select) qb.select(select);
+
+    const rows = (await qb.getMany()) as unknown as T[];
     const byId = new Map(rows.map((q) => [q.id, q]));
-    return ids
-      .map((id) => byId.get(id))
-      .filter((q): q is Question => q != null);
+    return ids.map((id) => byId.get(id)).filter((q): q is T => q != null);
   }
 
   private attemptsWithAnswersQb(

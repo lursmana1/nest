@@ -29,6 +29,7 @@ import {
   resolveGeorgianExamRule,
   formatExamRuleResponse,
 } from '../common/utils/georgian-exam-rules.util.js';
+import { resolvePageParams } from '../common/utils/pagination.util.js';
 
 @Controller('exam-attempts')
 export class ExamAttemptsController {
@@ -122,12 +123,14 @@ export class ExamAttemptsController {
     @Query('size', new ParseIntPipe({ optional: true })) size?: number,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
   ) {
-    const pageSize = size ?? limit ?? DEFAULT_HISTORY_PAGE_SIZE;
-    return this.attemptsService.getHistory(
-      req.user.userId,
-      Math.max(1, page ?? 1),
-      Math.min(MAX_HISTORY_PAGE_SIZE, Math.max(1, pageSize)),
+    const { page: pageNum, size: pageSize } = resolvePageParams(
+      { page, size, limit },
+      {
+        defaultSize: DEFAULT_HISTORY_PAGE_SIZE,
+        maxSize: MAX_HISTORY_PAGE_SIZE,
+      },
     );
+    return this.attemptsService.getHistory(req.user.userId, pageNum, pageSize);
   }
 
   @Get(':id')

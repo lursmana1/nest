@@ -16,6 +16,47 @@ import type {
 
 const DEFAULT_PAGE_SIZE = 10;
 
+interface RankedRow {
+  userId: number;
+  name: string;
+  surname: string | null;
+  score: number;
+  place: number;
+}
+
+/**
+ * Ranks every user with correct answers in the period. Ties break on user id so
+ * LIMIT/OFFSET paging stays stable — without it, pages can repeat or skip rows.
+ */
+const RANKED_CTE = `
+  WITH ranked AS (
+    SELECT
+      u.id      AS "userId",
+      u.name    AS name,
+      u.surname AS surname,
+      COUNT(*)::int AS score,
+      (ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC, u.id ASC))::int AS place
+    FROM user_answers a
+    INNER JOIN exam_attempts t ON t.id = a."attemptId"
+    INNER JOIN users u ON u.id = t."userId"
+    WHERE a.correct = true
+      AND t."completedAt" IS NOT NULL
+      AND a."createdAt" >= $1
+      AND a."createdAt" < $2
+    GROUP BY u.id, u.name, u.surname
+  )
+`;
+
+function toEntry(row: RankedRow): LeaderboardEntry {
+  return {
+    userId: row.userId,
+    place: row.place,
+    name: row.name,
+    surname: row.surname,
+    score: Number(row.score),
+  };
+}
+
 @Injectable()
 export class LeaderboardService {
   constructor(
@@ -39,59 +80,44 @@ export class LeaderboardService {
     }
 
     const { startDate, endDate } = period;
+    const manager = this.answerRepo.manager;
 
-    const baseQb = this.answerRepo
-      .createQueryBuilder('a')
-      .innerJoin('a.attempt', 't')
-      .innerJoin('t.user', 'u')
-      .where('a.correct = :correct', { correct: true })
-      .andWhere('t.completedAt IS NOT NULL')
-      .andWhere('a.createdAt >= :startDate', { startDate })
-      .andWhere('a.createdAt < :endDate', { endDate })
-      .select(['u.id', 'u.name', 'u.surname'])
-      .addSelect('COUNT(*)', 'score')
-      .groupBy('u.id')
-      .addGroupBy('u.name')
-      .addGroupBy('u.surname')
-      .orderBy('COUNT(*)', 'DESC');
-
-    const allRows = await baseQb.getRawMany<{
-      u_id: number;
-      u_name: string;
-      u_surname: string | null;
-      score: string;
-    }>();
-
-    const totalCount = allRows.length;
+    const totalCount = await this.countRankedUsers(startDate, endDate);
     const totalPages = Math.max(1, Math.ceil(totalCount / limit));
     const safePage = Math.max(1, Math.min(page, totalPages));
     const offset = (safePage - 1) * limit;
-    const paginatedRows = allRows.slice(offset, offset + limit);
 
-    const data: LeaderboardEntry[] = paginatedRows.map((r, i) => ({
-      userId: r.u_id,
-      place: offset + i + 1,
-      name: r.u_name,
-      surname: r.u_surname,
-      score: Number(r.score),
-    }));
+    const [pageRows, selfRows] = await Promise.all([
+      manager.query<RankedRow[]>(
+        `${RANKED_CTE} SELECT * FROM ranked ORDER BY place LIMIT $3 OFFSET $4`,
+        [startDate, endDate, limit, offset],
+      ),
+      userId == null
+        ? Promise.resolve([])
+        : manager.query<RankedRow[]>(
+            `${RANKED_CTE} SELECT * FROM ranked WHERE "userId" = $3`,
+            [startDate, endDate, userId],
+          ),
+    ]);
 
-    const currentUserRow =
-      userId != null ? allRows.find((r) => r.u_id === userId) : undefined;
-    const user =
-      userId != null
+    const data: LeaderboardEntry[] = pageRows.map(toEntry);
+
+    // A user with no correct answers this period is absent from the ranking.
+    const self = selfRows[0];
+    const fallbackUser =
+      userId != null && !self
         ? await this.userRepo.findOne({ where: { id: userId } })
         : null;
-    const placeIndex =
-      userId != null ? allRows.findIndex((r) => r.u_id === userId) : -1;
 
-    const currentUser = {
-      userId: userId ?? 0,
-      place: placeIndex >= 0 ? placeIndex + 1 : null,
-      name: user?.name ?? '',
-      surname: user?.surname ?? null,
-      score: currentUserRow ? Number(currentUserRow.score) : 0,
-    };
+    const currentUser = self
+      ? toEntry(self)
+      : {
+          userId: userId ?? 0,
+          place: null,
+          name: fallbackUser?.name ?? '',
+          surname: fallbackUser?.surname ?? null,
+          score: 0,
+        };
 
     return {
       startDate: startDate.toISOString(),
@@ -102,6 +128,23 @@ export class LeaderboardService {
       page: safePage,
       totalPages,
     };
+  }
+
+  private async countRankedUsers(
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const rows = await this.answerRepo.manager.query<[{ total: number }]>(
+      `SELECT COUNT(DISTINCT t."userId")::int AS total
+       FROM user_answers a
+       INNER JOIN exam_attempts t ON t.id = a."attemptId"
+       WHERE a.correct = true
+         AND t."completedAt" IS NOT NULL
+         AND a."createdAt" >= $1
+         AND a."createdAt" < $2`,
+      [startDate, endDate],
+    );
+    return rows[0]?.total ?? 0;
   }
 
   async getCurrentPeriod(): Promise<LeaderboardPeriod | null> {

@@ -1,6 +1,3 @@
-/** Minimum wrong answers before using personalized (weak-area) selection. @deprecated Use MIN_ANSWERS_FOR_PERSONALIZATION */
-export const MIN_WRONG_ANSWERS_FOR_STATS = 50;
-
 /** Minimum total answers before any personalization (100–499: mainly random; 500+: full). */
 export const MIN_ANSWERS_FOR_PERSONALIZATION = 100;
 
@@ -13,17 +10,11 @@ export const DEFAULT_QUESTION_COUNT = 30;
 /** Exam duration in minutes. */
 export const EXAM_DURATION_MINUTES = 30;
 
-/** @deprecated Use resolveGeorgianExamRule() — pass thresholds are per category. */
-export const EXAM_PASS_PERCENT = 0.9;
-
 /** Max history entries to load for weakness computation. */
 export const MAX_HISTORY_FOR_WEIGHTING = 500;
 
-/** Max IDs per bucket to keep $in/$nin fast in MongoDB. */
+/** Max IDs per bucket to keep the `IN (...)` lists in weighted sampling fast. */
 export const MAX_WEAKNESS_IDS_CAP = 100;
-
-/** Max candidates to sample before weighting (for personalized selection). */
-export const MAX_CANDIDATE_SAMPLE_SIZE = 200;
 
 /** Max raw answers to return in stats. */
 export const MAX_STATS_LIMIT = 1000;
@@ -46,6 +37,9 @@ export const QUESTION_MASTERY_CORRECT_RATIO = 0.6;
 
 /** Completed attempts used for readiness exam + recent answer accuracy (most recent first). */
 export const READINESS_MAX_ATTEMPTS = 20;
+
+/** Answers from the start of an attempt that count towards an "early fail". */
+export const EARLY_FAIL_WINDOW = 10;
 
 /** Readiness score >= this + last pass + topic coverage → readyForExam. */
 export const READINESS_READY_SCORE_THRESHOLD = 90;

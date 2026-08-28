@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Question } from '../questions/entities/question.entity';
 import { QuestionSyncService } from './question-sync.service';
+import { GeminiClient } from './gemini.client';
+import { QuestionUpsertWriter } from './question-upsert.writer';
 import { buildTypeOrmOptions } from '../config/typeorm.config';
 import { ConfigService } from '@nestjs/config';
 
@@ -19,7 +21,7 @@ import { ConfigService } from '@nestjs/config';
     }),
     TypeOrmModule.forFeature([Question]),
   ],
-  providers: [QuestionSyncService],
+  providers: [QuestionSyncService, GeminiClient, QuestionUpsertWriter],
   exports: [QuestionSyncService],
 })
 export class QuestionSyncStandaloneModule {}

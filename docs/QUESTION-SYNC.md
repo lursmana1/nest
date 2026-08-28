@@ -17,7 +17,8 @@ Syncs the driving exam database using Gemini: **Georgian (`ka`) is the only sour
 
 ## Schema
 
-`question_explained`, `ai_tutor` on each row. MongoDB schema includes `ai_tutor`. SQL example:
+`question_explained` and `ai_tutor` are columns on `questions`, which has the composite
+primary key `(id, lang)` — so each language is its own row:
 
 ```sql
 ALTER TABLE questions ADD COLUMN ai_tutor TEXT;
@@ -28,7 +29,7 @@ ALTER TABLE questions ADD COLUMN ai_tutor TEXT;
 ```env
 GEMINI_API_KEY=your_key
 GEMINI_MODEL=gemini-3.1-flash-lite-preview   # optional; internal API id (not display name)
-MONGODB_URI=...
+DATABASE_URL=postgres://...
 ```
 
 ## Usage
@@ -58,7 +59,7 @@ npm run sync:questions -- 600 1200
 
 ## Re-running with new “master” logic
 
-If you already ran the old sync, IDs with all three `ai_tutor` fields filled are **skipped**. To regenerate from Georgian only, clear `ai_tutor` (and optionally `ru`/`en` `question_explained`) for those IDs in MongoDB, then run again.
+If you already ran the old sync, IDs with all three `ai_tutor` fields filled are **skipped**. To regenerate from Georgian only, clear `ai_tutor` (and optionally `ru`/`en` `question_explained`) for those IDs in Postgres, then run again.
 
 ## Progress
 

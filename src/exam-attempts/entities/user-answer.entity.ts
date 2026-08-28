@@ -32,7 +32,7 @@ export class UserAnswer {
   @Column({ type: 'varchar', length: 500 })
   chosenAnswer: string;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 
   @ManyToOne(() => ExamAttempt, (a) => a.answers, { onDelete: 'CASCADE' })

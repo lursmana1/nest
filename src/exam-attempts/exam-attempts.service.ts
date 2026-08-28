@@ -23,9 +23,12 @@ import {
   resolveGeorgianExamRule,
 } from '../common/utils/georgian-exam-rules.util.js';
 import {
+  attemptDeadline,
   computeAttemptDuration,
+  isAttemptExpired,
   resolveDisplayDuration,
 } from './attempt-duration.util.js';
+import { type ExamQuestion } from './exam-question.view.js';
 import type {
   StartAttemptOptions,
   PaginatedAttempts,
@@ -53,7 +56,7 @@ export class ExamAttemptsService {
   ): Promise<{
     attemptId: number;
     endDate: Date;
-    questions: Question[];
+    questions: ExamQuestion[];
     questionCount: number;
     minCorrectToPass: number;
     categoryId: number | null;
@@ -87,7 +90,10 @@ export class ExamAttemptsService {
       }),
     );
 
-    const questions = await this.queries.findQuestionsByIds(questionIds, lang);
+    const questions = await this.queries.findExamQuestionsByIds(
+      questionIds,
+      lang,
+    );
 
     return {
       attemptId: saved.id,
@@ -109,30 +115,39 @@ export class ExamAttemptsService {
     if (attempt.completedAt) {
       throw new BadRequestException('Attempt already completed');
     }
+    if (isAttemptExpired(attempt)) {
+      // Settle it now so an abandoned attempt cannot linger as incomplete.
+      await this.completeAttempt(attempt, this.settlementTime(attempt));
+      throw new BadRequestException('Attempt expired');
+    }
 
     this.assertAnswerable(attempt, questionId);
 
+    // Only the grading columns — the full row carries ~2KB of tutor text.
     const question = await this.questionRepo.findOne({
       where: { id: questionId, lang: attempt.lang },
+      select: { id: true, lang: true, correct_answer: true, subject: true },
     });
     if (!question) {
       throw new NotFoundException('Question not found');
     }
 
     const correct = question.correct_answer === chosenAnswer;
-    const savedAnswer = await this.answerRepo.save(
-      this.answerRepo.create({
-        attemptId,
-        questionId,
-        subject: question.subject,
-        correct,
-        chosenAnswer,
-      }),
-    );
+    // `insert` rather than `save`: save() wraps this single row in its own
+    // BEGIN/COMMIT, which costs two extra round trips per answer.
+    await this.answerRepo.insert({
+      attemptId,
+      questionId,
+      subject: question.subject,
+      correct,
+      chosenAnswer,
+    });
 
-    attempt.answers = [...(attempt.answers ?? []), savedAnswer];
-    if (attempt.answers.length >= attempt.questionIds.length) {
-      await this.completeAttempt(attempt);
+    const previous = attempt.answers ?? [];
+    if (previous.length + 1 >= attempt.questionIds.length) {
+      const correctCount =
+        previous.filter((a) => a.correct).length + (correct ? 1 : 0);
+      await this.completeAttempt(attempt, new Date(), correctCount);
     }
 
     return { correct };
@@ -151,7 +166,7 @@ export class ExamAttemptsService {
       };
     }
 
-    return this.completeAttempt(attempt);
+    return this.completeAttempt(attempt, this.settlementTime(attempt));
   }
 
   getHistory(
@@ -173,16 +188,23 @@ export class ExamAttemptsService {
     return this.queries.getRawAnswers(userId, limit);
   }
 
-  private async completeAttempt(attempt: ExamAttempt): Promise<{
+  /** Grade an expired attempt as of its deadline, not the later request time. */
+  private settlementTime(attempt: ExamAttempt): Date {
+    return isAttemptExpired(attempt)
+      ? (attemptDeadline(attempt) ?? new Date())
+      : new Date();
+  }
+
+  private async completeAttempt(
+    attempt: ExamAttempt,
+    completedAt: Date,
+    correctCount = (attempt.answers ?? []).filter((a) => a.correct).length,
+  ): Promise<{
     completedAt: Date;
     passed: boolean;
     durationSeconds: number;
   }> {
-    const correctCount = (attempt.answers ?? []).filter(
-      (a) => a.correct,
-    ).length;
     const passed = this.evaluatePass(attempt, correctCount);
-    const completedAt = new Date();
     const durationSeconds = computeAttemptDuration(attempt, completedAt);
 
     await this.attemptRepo.update(attempt.id, {

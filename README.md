@@ -233,7 +233,6 @@ src/
 ├── auth/              # JWT + Google OAuth
 ├── categories/        # License categories
 ├── questions/         # Question bank + filters
-├── exams/             # Generated exam tickets
 ├── exam-attempts/     # Attempts, scoring, question selection
 │   └── question-selection/
 │       ├── weakness.service.ts

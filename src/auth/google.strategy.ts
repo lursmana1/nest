@@ -42,11 +42,20 @@ export class GoogleStrategy
   validate(
     _accessToken: string,
     _refreshToken: string,
-    profile: { id: string; emails?: { value: string }[]; displayName?: string },
+    profile: {
+      id: string;
+      emails?: { value: string; verified?: boolean | string }[];
+      displayName?: string;
+    },
     done: VerifyCallback,
   ): void {
     const { id, emails, displayName } = profile;
-    const email = emails?.[0]?.value;
+    // Only a Google-verified address may be trusted to match an existing
+    // account — see validateOrCreateGoogleUser, which links on email.
+    const verifiedEmail = emails?.find(
+      (e) => e.verified === true || e.verified === 'true',
+    );
+    const email = verifiedEmail?.value;
     const name = displayName ?? email?.split('@')[0] ?? 'User';
 
     const user = {

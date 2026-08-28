@@ -2,24 +2,11 @@ import { EXAM_DURATION_MINUTES } from '../common/constants/exam.constants.js';
 import type { ExamAttempt } from './entities/exam-attempt.entity';
 
 const MAX_DURATION_SECONDS = EXAM_DURATION_MINUTES * 60;
-/** createdAt/completedAt mix UTC and Georgia local; strip UTC+4 when present. */
-const GEORGIA_OFFSET_SECONDS = 4 * 60 * 60;
-
-function elapsedSecondsBetween(startMs: number, endMs: number): number {
-  let seconds = Math.round(Math.abs(endMs - startMs) / 1000);
-  if (seconds > MAX_DURATION_SECONDS) {
-    const withoutOffset = seconds - GEORGIA_OFFSET_SECONDS;
-    if (withoutOffset >= 0 && withoutOffset <= MAX_DURATION_SECONDS) {
-      seconds = withoutOffset;
-    } else {
-      seconds = Math.min(seconds, MAX_DURATION_SECONDS);
-    }
-  }
-  return seconds;
-}
 
 /**
- * Time spent: |completedAt − createdAt|, ignoring a UTC+4 storage skew.
+ * Time spent: completedAt − createdAt, capped at the exam window.
+ * An attempt settled after its deadline is graded as of the deadline, so the
+ * cap only bites on rows predating server-side timer enforcement.
  */
 export function computeAttemptDuration(
   attempt: ExamAttempt,
@@ -28,12 +15,30 @@ export function computeAttemptDuration(
   const startedAt = toEpochMs(attempt.createdAt);
   const endedAt = toEpochMs(completedAt);
   if (startedAt == null || endedAt == null) return 0;
-  return elapsedSecondsBetween(startedAt, endedAt);
+  const seconds = Math.round(Math.abs(endedAt - startedAt) / 1000);
+  return Math.min(seconds, MAX_DURATION_SECONDS);
 }
 
 export function resolveDisplayDuration(attempt: ExamAttempt): number | null {
   if (!attempt.completedAt) return null;
   return computeAttemptDuration(attempt, attempt.completedAt);
+}
+
+/** Server-side deadline as a real Date, or null when unset / unparseable. */
+export function attemptDeadline(
+  attempt: Pick<ExamAttempt, 'endDate'>,
+): Date | null {
+  const ms = toEpochMs(attempt.endDate);
+  return ms == null ? null : new Date(ms);
+}
+
+/** True once the attempt's deadline has passed — no further answers allowed. */
+export function isAttemptExpired(
+  attempt: Pick<ExamAttempt, 'endDate'>,
+  now: Date = new Date(),
+): boolean {
+  const deadline = attemptDeadline(attempt);
+  return deadline != null && now.getTime() > deadline.getTime();
 }
 
 function toEpochMs(value?: Date | string | number | null): number | null {

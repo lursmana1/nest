@@ -1,8 +1,11 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import { QuestionSyncService } from './question-sync.service';
 import { RunSyncDto } from './dto/run-sync.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AdminGuard } from '../auth/admin.guard';
 
 @Controller('question-sync')
+@UseGuards(JwtAuthGuard, AdminGuard)
 export class QuestionSyncController {
   constructor(private readonly syncService: QuestionSyncService) {}
 

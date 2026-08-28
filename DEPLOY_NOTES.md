@@ -64,6 +64,35 @@ After deploy, verify: `GET https://YOUR-API/auth/config` should return the same 
 - [ ] `GET /categories` returns 10 categories
 - [ ] `GET /questions?lang=ka&category=1&page=1` returns `total > 0` with Georgian text
 
+## Timezones (read before moving hosts)
+
+All date columns are `timestamptz`, so Postgres stores absolute instants and the
+server's timezone no longer changes what a stored date *means*. This was migrated
+from `timestamp without time zone`, where values were written in the writing
+process's local zone — which silently broke arithmetic between two dates.
+
+**When moving to Hetzner (or any non-UTC+4 host):**
+
+- [ ] Set `TZ=UTC` on the app process/container. Not required for correctness any
+      more, but it keeps logs and any `AT TIME ZONE` usage unambiguous.
+- [ ] Do **not** reintroduce `timestamp` (without time zone) columns. New date
+      columns must be `@CreateDateColumn({ type: 'timestamptz' })` or
+      `@Column({ type: 'timestamptz' })`.
+- [ ] Germany observes DST (Europe/Berlin, UTC+1/+2). A fixed offset constant
+      cannot correct for it — this is why the old `GEORGIA_OFFSET_SECONDS` hack
+      was removed rather than re-tuned.
+- [ ] Verify after deploy: finish an exam attempt and confirm `durationSeconds`
+      matches the real elapsed time.
+
+Re-run the check any time (dry run, read-only):
+
+```bash
+npm run db:migrate-timestamptz
+```
+
+It reports every naive timestamp column it finds and exits without changing
+anything unless passed `--confirm`. It should report zero columns.
+
 ### Build / start (Render)
 
 | Setting | Value |

@@ -29,6 +29,6 @@ export class Blog {
   @JoinColumn({ name: 'creatorId' })
   creator: User;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

@@ -5,7 +5,6 @@ import { Category } from '../categories/entities/category.entity';
 import { ExamAttempt } from '../exam-attempts/entities/exam-attempt.entity';
 import { UserAnswer } from '../exam-attempts/entities/user-answer.entity';
 import { PracticeAnswer } from '../practice-answers/entities/practice-answer.entity';
-import { Exam } from '../exams/entities/exam.entity';
 import { LeaderboardPeriod } from '../leaderboard/entities/leaderboard-period.entity';
 import { Question } from '../questions/entities/question.entity';
 import { User } from '../users/entities/user.entity';
@@ -19,7 +18,6 @@ export const TYPEORM_ENTITIES = [
   LeaderboardPeriod,
   Question,
   Category,
-  Exam,
 ];
 
 function pgConnection(config: ConfigService) {
@@ -52,6 +50,9 @@ export function buildTypeOrmOptions(
   return {
     ...pgConnection(config),
     entities: TYPEORM_ENTITIES,
-    synchronize: config.get('DB_SYNCHRONIZE') === 'true',
+    // Never let schema sync run against production, whatever the env says.
+    synchronize:
+      config.get('NODE_ENV') !== 'production' &&
+      config.get('DB_SYNCHRONIZE') === 'true',
   };
 }
