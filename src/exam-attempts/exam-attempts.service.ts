@@ -5,11 +5,9 @@ import {
   BadRequestException,
   ConflictException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectEntityManager, InjectRepository } from '@nestjs/typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { ExamAttempt } from './entities/exam-attempt.entity';
-import { UserAnswer } from './entities/user-answer.entity';
-import { Question } from '../questions/entities/question.entity';
 import { QuestionSelectionService } from './question-selection/question-selection.service';
 import { AttemptQueryService } from './attempt-query.service';
 import { DEFAULT_LANG } from '../common/constants/lang.constants.js';
@@ -19,16 +17,22 @@ import {
   EXAM_DURATION_MINUTES,
 } from '../common/constants/exam.constants.js';
 import {
+  DEFAULT_GEORGIAN_EXAM_RULE,
   isExamPassed,
   resolveGeorgianExamRule,
 } from '../common/utils/georgian-exam-rules.util.js';
+import { parsePgBoolean } from '../common/utils/pg-row.util.js';
+import {
+  SUBMIT_ANSWER_SQL,
+  type SubmitAnswerRow,
+} from './submit-answer.query.js';
 import {
   attemptDeadline,
   computeAttemptDuration,
   isAttemptExpired,
   resolveDisplayDuration,
 } from './attempt-duration.util.js';
-import { type ExamQuestion } from './exam-question.view.js';
+import type { Question } from '../questions/entities/question.entity';
 import type {
   StartAttemptOptions,
   PaginatedAttempts,
@@ -42,10 +46,8 @@ export class ExamAttemptsService {
   constructor(
     @InjectRepository(ExamAttempt)
     private readonly attemptRepo: Repository<ExamAttempt>,
-    @InjectRepository(UserAnswer)
-    private readonly answerRepo: Repository<UserAnswer>,
-    @InjectRepository(Question)
-    private readonly questionRepo: Repository<Question>,
+    @InjectEntityManager()
+    private readonly manager: EntityManager,
     private readonly selectionService: QuestionSelectionService,
     private readonly queries: AttemptQueryService,
   ) {}
@@ -56,7 +58,7 @@ export class ExamAttemptsService {
   ): Promise<{
     attemptId: number;
     endDate: Date;
-    questions: ExamQuestion[];
+    questions: Question[];
     questionCount: number;
     minCorrectToPass: number;
     categoryId: number | null;
@@ -90,10 +92,7 @@ export class ExamAttemptsService {
       }),
     );
 
-    const questions = await this.queries.findExamQuestionsByIds(
-      questionIds,
-      lang,
-    );
+    const questions = await this.queries.findQuestionsByIds(questionIds, lang);
 
     return {
       attemptId: saved.id,
@@ -111,46 +110,19 @@ export class ExamAttemptsService {
     questionId: number,
     chosenAnswer: string,
   ): Promise<{ correct: boolean }> {
-    const attempt = await this.queries.findAttemptForUser(attemptId, userId);
-    if (attempt.completedAt) {
-      throw new BadRequestException('Attempt already completed');
-    }
-    if (isAttemptExpired(attempt)) {
-      // Settle it now so an abandoned attempt cannot linger as incomplete.
-      await this.completeAttempt(attempt, this.settlementTime(attempt));
-      throw new BadRequestException('Attempt expired');
-    }
+    const rows = await this.manager.query<SubmitAnswerRow[]>(
+      SUBMIT_ANSWER_SQL,
+      [
+        attemptId,
+        userId,
+        questionId,
+        chosenAnswer,
+        EXAM_DURATION_MINUTES * 60,
+        DEFAULT_GEORGIAN_EXAM_RULE.minCorrectToPass,
+      ],
+    );
 
-    this.assertAnswerable(attempt, questionId);
-
-    // Only the grading columns — the full row carries ~2KB of tutor text.
-    const question = await this.questionRepo.findOne({
-      where: { id: questionId, lang: attempt.lang },
-      select: { id: true, lang: true, correct_answer: true, subject: true },
-    });
-    if (!question) {
-      throw new NotFoundException('Question not found');
-    }
-
-    const correct = question.correct_answer === chosenAnswer;
-    // `insert` rather than `save`: save() wraps this single row in its own
-    // BEGIN/COMMIT, which costs two extra round trips per answer.
-    await this.answerRepo.insert({
-      attemptId,
-      questionId,
-      subject: question.subject,
-      correct,
-      chosenAnswer,
-    });
-
-    const previous = attempt.answers ?? [];
-    if (previous.length + 1 >= attempt.questionIds.length) {
-      const correctCount =
-        previous.filter((a) => a.correct).length + (correct ? 1 : 0);
-      await this.completeAttempt(attempt, new Date(), correctCount);
-    }
-
-    return { correct };
+    return this.readSubmitAnswer(rows[0]);
   }
 
   async finishAttempt(
@@ -220,12 +192,24 @@ export class ExamAttemptsService {
     return { completedAt, passed, durationSeconds };
   }
 
-  private assertAnswerable(attempt: ExamAttempt, questionId: number): void {
-    if (!attempt.questionIds.includes(questionId)) {
-      throw new ForbiddenException('Question not in this attempt');
-    }
-    if (attempt.answers?.some((a) => a.questionId === questionId)) {
-      throw new ConflictException('Already answered this question');
+  private readSubmitAnswer(row: SubmitAnswerRow | undefined): {
+    correct: boolean;
+  } {
+    switch (row?.status) {
+      case 'ok':
+        return { correct: parsePgBoolean(row.correct) };
+      case 'already_completed':
+        throw new BadRequestException('Attempt already completed');
+      case 'expired':
+        throw new BadRequestException('Attempt expired');
+      case 'not_in_ticket':
+        throw new ForbiddenException('Question not in this attempt');
+      case 'already_answered':
+        throw new ConflictException('Already answered this question');
+      case 'question_not_found':
+        throw new NotFoundException('Question not found');
+      default:
+        throw new NotFoundException('Attempt not found');
     }
   }
 

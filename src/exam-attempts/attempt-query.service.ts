@@ -11,10 +11,6 @@ import {
 } from '../common/constants/exam.constants.js';
 import { resolveDisplayDuration } from './attempt-duration.util.js';
 import { parsePgBoolean } from '../common/utils/pg-row.util.js';
-import {
-  EXAM_QUESTION_COLUMNS,
-  type ExamQuestion,
-} from './exam-question.view.js';
 import type {
   AttemptSummary,
   AttemptHistoryCounts,
@@ -76,10 +72,10 @@ export class AttemptQueryService {
 
   async getAttempt(userId: number, attemptId: number): Promise<AttemptDetail> {
     const attempt = await this.findAttemptForUser(attemptId, userId);
-    // Answers stay hidden until the attempt is settled, then power the review.
-    const questions = attempt.completedAt
-      ? await this.findQuestionsByIds(attempt.questionIds, attempt.lang)
-      : await this.findExamQuestionsByIds(attempt.questionIds, attempt.lang);
+    const questions = await this.findQuestionsByIds(
+      attempt.questionIds,
+      attempt.lang,
+    );
 
     return {
       id: attempt.id,
@@ -151,36 +147,16 @@ export class AttemptQueryService {
 
   /** Preserve ticket order from `questionIds` (IN-query order is undefined). */
   async findQuestionsByIds(ids: number[], lang: string): Promise<Question[]> {
-    return this.loadQuestions(ids, lang);
-  }
-
-  /** Live-exam variant: answer-key columns are never read from the database. */
-  async findExamQuestionsByIds(
-    ids: number[],
-    lang: string,
-  ): Promise<ExamQuestion[]> {
-    return this.loadQuestions(
-      ids,
-      lang,
-      EXAM_QUESTION_COLUMNS.map((c) => `q.${c}`),
-    );
-  }
-
-  private async loadQuestions<T extends { id: number }>(
-    ids: number[],
-    lang: string,
-    select?: string[],
-  ): Promise<T[]> {
     if (!ids.length) return [];
-    const qb = this.questionRepo
+    const rows = await this.questionRepo
       .createQueryBuilder('q')
       .where('q.lang = :lang', { lang })
-      .andWhere('q.id IN (:...ids)', { ids });
-    if (select) qb.select(select);
-
-    const rows = (await qb.getMany()) as unknown as T[];
+      .andWhere('q.id IN (:...ids)', { ids })
+      .getMany();
     const byId = new Map(rows.map((q) => [q.id, q]));
-    return ids.map((id) => byId.get(id)).filter((q): q is T => q != null);
+    return ids
+      .map((id) => byId.get(id))
+      .filter((q): q is Question => q != null);
   }
 
   private attemptsWithAnswersQb(
