@@ -77,14 +77,22 @@ describe('ExamAttemptsService', () => {
   });
 
   describe('startAttempt', () => {
-    it('returns the full question rows including the answer key', async () => {
+    it('returns createdAt, endDate, and duration so the client can time the exam', async () => {
       const selection = module.get<{ selectQuestions: jest.Mock }>(
         QuestionSelectionService,
       );
       selection.selectQuestions.mockResolvedValue([10]);
+      const before = Date.now();
 
-      await service.startAttempt(7, { lang: 'ka', count: 30 });
+      const result = await service.startAttempt(7, { lang: 'ka', count: 30 });
 
+      expect(result.createdAt).toBeInstanceOf(Date);
+      expect(result.endDate).toBeInstanceOf(Date);
+      expect(result.durationMinutes).toBe(30);
+      expect(result.endDate.getTime() - result.createdAt.getTime()).toBe(
+        HALF_HOUR_MS,
+      );
+      expect(result.createdAt.getTime()).toBeGreaterThanOrEqual(before - 1000);
       expect(queries.findQuestionsByIds).toHaveBeenCalledWith([10], 'ka');
     });
   });

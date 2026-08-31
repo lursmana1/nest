@@ -32,9 +32,9 @@ import {
   isAttemptExpired,
   resolveDisplayDuration,
 } from './attempt-duration.util.js';
-import type { Question } from '../questions/entities/question.entity';
 import type {
   StartAttemptOptions,
+  StartAttemptResponse,
   PaginatedAttempts,
   RawAnswerRow,
   AttemptDetail,
@@ -55,14 +55,7 @@ export class ExamAttemptsService {
   async startAttempt(
     userId: number,
     options: StartAttemptOptions,
-  ): Promise<{
-    attemptId: number;
-    endDate: Date;
-    questions: Question[];
-    questionCount: number;
-    minCorrectToPass: number;
-    categoryId: number | null;
-  }> {
+  ): Promise<StartAttemptResponse> {
     const lang = options.lang ?? DEFAULT_LANG;
     const examRule = resolveGeorgianExamRule({
       categories: options.categories,
@@ -94,9 +87,14 @@ export class ExamAttemptsService {
 
     const questions = await this.queries.findQuestionsByIds(questionIds, lang);
 
+    const startedAt = saved.createdAt ?? createdAt;
+    const deadline = saved.endDate ?? endDate;
+
     return {
       attemptId: saved.id,
-      endDate: saved.endDate ?? endDate,
+      createdAt: startedAt,
+      endDate: deadline,
+      durationMinutes: EXAM_DURATION_MINUTES,
       questions,
       questionCount: examRule.questionCount,
       minCorrectToPass: examRule.minCorrectToPass,

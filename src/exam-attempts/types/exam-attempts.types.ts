@@ -9,6 +9,18 @@ export interface StartAttemptOptions {
   allSubjects?: boolean;
 }
 
+/** POST /exam-attempts/start — timer fields are ISO dates from the server. */
+export interface StartAttemptResponse {
+  attemptId: number;
+  createdAt: Date;
+  endDate: Date;
+  durationMinutes: number;
+  questions: Question[];
+  questionCount: number;
+  minCorrectToPass: number;
+  categoryId: number | null;
+}
+
 export interface AttemptSummary {
   id: number;
   questionCount: number;
